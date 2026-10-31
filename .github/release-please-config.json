@@ -5,6 +5,7 @@
       "release-type": "go",
       "include-component-in-tag": false,
       "draft": true,
+      "extra-files": ["README.md"],
       "changelog-sections": [
         { "type": "feat", "section": "Features", "hidden": false },
         { "type": "feature", "section": "Features", "hidden": false },

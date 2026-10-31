@@ -64,6 +64,49 @@ HTTP client gets its credentials is different.
   `principalSet://…/workloadIdentityPools/POOL/*` once covers every host
   without using up that limit. Revocation still happens at the provider.
 
+## Install
+
+Each [release](https://github.com/monetr/k8s-cloudkms-plugin/releases)
+publishes static linux/amd64 and linux/arm64 binaries of both tools, each with
+a `.sha256` file. This downloads the latest release for the current
+architecture, verifies the checksums, and installs both binaries to
+`/usr/local/bin` (where the [systemd unit](deploy/systemd/k8s-cloudkms-plugin.service)
+expects the plugin). If any download or checksum fails, it stops before
+installing anything.
+
+<!-- x-release-please-start-version -->
+```sh
+(
+  set -euo pipefail
+  VERSION="v1.0.0"
+  case "$(uname -m)" in
+    x86_64) ARCH=amd64 ;;
+    aarch64 | arm64) ARCH=arm64 ;;
+    *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  BASE="https://github.com/monetr/k8s-cloudkms-plugin/releases/download/${VERSION}"
+  cd "$(mktemp -d)"
+  for bin in k8s-cloudkms-plugin tpm-wif-key; do
+    curl -fsSLO "${BASE}/${bin}-${VERSION}-linux-${ARCH}"
+    curl -fsSLO "${BASE}/${bin}-${VERSION}-linux-${ARCH}.sha256"
+  done
+  sha256sum -c ./*.sha256
+  for bin in k8s-cloudkms-plugin tpm-wif-key; do
+    sudo install -m 0755 "${bin}-${VERSION}-linux-${ARCH}" "/usr/local/bin/${bin}"
+  done
+)
+```
+<!-- x-release-please-end -->
+
+The binaries also have build provenance attestations. Attestations are matched
+by the file's SHA-256, not its name, so you can check the installed binaries
+directly to confirm they were built by this repository's release workflow:
+
+```sh
+gh attestation verify /usr/local/bin/k8s-cloudkms-plugin --repo monetr/k8s-cloudkms-plugin
+gh attestation verify /usr/local/bin/tpm-wif-key --repo monetr/k8s-cloudkms-plugin
+```
+
 ## Build
 
 Requires Go 1.26+.
