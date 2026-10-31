@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.1](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.0...v1.0.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** update module google.golang.org/api to v0.308.0 ([#9](https://github.com/monetr/k8s-cloudkms-plugin/issues/9)) ([38e782b](https://github.com/monetr/k8s-cloudkms-plugin/commit/38e782b88320eb44fd499f262cdecedb9c50c990))
+* Go mod tidy on renovate updates ([234bf94](https://github.com/monetr/k8s-cloudkms-plugin/commit/234bf94e3f3972c4f38822da4f5f01e0795648a0))
+* Make the health endpoint a unix socket instead ([d297949](https://github.com/monetr/k8s-cloudkms-plugin/commit/d29794930cf3c0d20a5ca4e25db7792c1da3f71e))
+* Remove `--integration-test` from prod binary ([cadfa97](https://github.com/monetr/k8s-cloudkms-plugin/commit/cadfa9789701b973ffdccc10179847b7ceed2c62))
+* Set a max lifetime of 1 hour ([d3a9223](https://github.com/monetr/k8s-cloudkms-plugin/commit/d3a9223c11f7aff8b6a589284eef0c4d2730f95d))
+
+
+### Miscellaneous
+
+* Updating README ([a374f22](https://github.com/monetr/k8s-cloudkms-plugin/commit/a374f222273c2e315b52c7b6b99dce2b9ef2a673))
+
 ## 1.0.0 (2026-10-31)
 
 
