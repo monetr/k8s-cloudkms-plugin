@@ -15,6 +15,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -29,7 +30,11 @@ const LevelFatal = slog.Level(12)
 
 var (
 	verbosity Level
-	logger    = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+	logger    = newLogger(os.Stderr)
+)
+
+func newLogger(w io.Writer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
 		AddSource: true,
 		Level:     slog.LevelInfo,
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
@@ -41,7 +46,7 @@ var (
 			return a
 		},
 	}))
-)
+}
 
 func init() {
 	flag.Var(&verbosity, "v", "log level for V logs")

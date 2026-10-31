@@ -143,27 +143,9 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 		}
 	}
 
-	conf := externalaccount.Config{
-		// STS wants the provider as a "//iam.googleapis.com/..." resource name...
-		Audience:         "//iam.googleapis.com/" + *wifProvider,
-		SubjectTokenType: "urn:ietf:params:oauth:token-type:jwt",
-		Scopes:           []string{cloudkms.CloudPlatformScope},
-		SubjectTokenSupplier: &tpmkey.JWTSupplier{
-			Open: func() (transport.TPMCloser, error) {
-				return linuxtpm.Open(*pathToTPM)
-			},
-			Handle:  tpm2.TPMHandle(handle),
-			Issuer:  *jwtIssuer,
-			Subject: subject,
-			// ...while the provider's default allowed audience for the JWT is the https form.
-			Audience: "https://iam.googleapis.com/" + *wifProvider,
-			Lifetime: *jwtLifetime,
-		},
-	}
-	if *impersonateSA != "" {
-		conf.ServiceAccountImpersonationURL = fmt.Sprintf(
-			"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken", *impersonateSA)
-	}
+	conf := externalAccountConfig(func() (transport.TPMCloser, error) {
+		return linuxtpm.Open(*pathToTPM)
+	}, tpm2.TPMHandle(handle), *wifProvider, *jwtIssuer, subject, *jwtLifetime, *impersonateSA)
 
 	ts, err := externalaccount.NewTokenSource(ctx, conf)
 	if err != nil {
@@ -177,6 +159,37 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 	glog.Infof("Authenticated to Google Cloud via %s as subject %q using TPM key 0x%x", *wifProvider, subject, handle)
 
 	return oauth2.NewClient(ctx, ts), nil
+}
+
+// externalAccountConfig describes the STS exchange (and optional service
+// account impersonation) for a JWT signed by the TPM key at handle.
+func externalAccountConfig(
+	open func() (transport.TPMCloser, error),
+	handle tpm2.TPMHandle,
+	provider, issuer, subject string,
+	lifetime time.Duration,
+	serviceAccount string,
+) externalaccount.Config {
+	conf := externalaccount.Config{
+		// STS wants the provider as a "//iam.googleapis.com/..." resource name...
+		Audience:         "//iam.googleapis.com/" + provider,
+		SubjectTokenType: "urn:ietf:params:oauth:token-type:jwt",
+		Scopes:           []string{cloudkms.CloudPlatformScope},
+		SubjectTokenSupplier: &tpmkey.JWTSupplier{
+			Open:    open,
+			Handle:  handle,
+			Issuer:  issuer,
+			Subject: subject,
+			// ...while the provider's default allowed audience for the JWT is the https form.
+			Audience: "https://iam.googleapis.com/" + provider,
+			Lifetime: lifetime,
+		},
+	}
+	if serviceAccount != "" {
+		conf.ServiceAccountImpersonationURL = fmt.Sprintf(
+			"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken", serviceAccount)
+	}
+	return conf
 }
 
 func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m *plugin.Metrics) error {

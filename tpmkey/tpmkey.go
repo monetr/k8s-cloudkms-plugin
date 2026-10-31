@@ -146,7 +146,12 @@ func sign(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest 
 	if err != nil {
 		return nil, err
 	}
-	r, s := ecSig.SignatureR.Buffer, ecSig.SignatureS.Buffer
+	return encodeES256(ecSig.SignatureR.Buffer, ecSig.SignatureS.Buffer)
+}
+
+// encodeES256 left-pads r and s to 32 bytes each. TPMs may return them with
+// leading zero bytes stripped, but JWS requires the fixed-width form.
+func encodeES256(r, s []byte) ([]byte, error) {
 	if len(r) > 32 || len(s) > 32 {
 		return nil, errors.New("TPM returned an oversized ECDSA signature")
 	}
