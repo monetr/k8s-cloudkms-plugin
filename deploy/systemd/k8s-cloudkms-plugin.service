@@ -1,0 +1,80 @@
+# k8s-cloudkms-plugin (TPM-backed) for nodes that run kube-apiserver.
+#
+# Install:
+#   install -m 0755 bin/k8s-cloudkms-plugin /usr/local/bin/
+#   install -m 0644 deploy/systemd/k8s-cloudkms-plugin.service /etc/systemd/system/
+#   install -D -m 0644 deploy/systemd/k8s-cloudkms-plugin.env /etc/k8s-cloudkms-plugin/env
+#   # edit /etc/k8s-cloudkms-plugin/env (paste this node's `plugin_args` Terraform output)
+#   systemctl daemon-reload && systemctl enable --now k8s-cloudkms-plugin
+#
+# The plugin listens on /run/kmsplugin/socket.sock (== /var/run/kmsplugin/socket.sock),
+# which is what kube-apiserver's EncryptionConfiguration should point at.
+
+[Unit]
+Description=Kubernetes Cloud KMS plugin (TPM-backed Workload Identity Federation)
+Documentation=https://github.com/monetr/k8s-cloudkms-plugin
+Wants=network-online.target
+After=network-online.target
+# kube-apiserver can't read or write secrets until the plugin is up, and on
+# kubeadm-style clusters kube-apiserver is a static pod started by kubelet.
+Before=kubelet.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/k8s-cloudkms-plugin/env
+# $PLUGIN_ARGS is deliberately unbraced so systemd splits it into separate args.
+ExecStart=/usr/local/bin/k8s-cloudkms-plugin -logtostderr \
+    --path-to-unix-socket=/run/kmsplugin/socket.sock \
+    --path-to-tpm=/dev/tpmrm0 \
+    $PLUGIN_ARGS
+Restart=always
+RestartSec=5s
+
+# Runs as an unprivileged, throwaway user. TPM access comes only from the tss
+# group, which owns /dev/tpmrm0 on most distros.
+DynamicUser=yes
+SupplementaryGroups=tss
+
+# /run/kmsplugin. Preserve it across restarts: if kube-apiserver runs in a
+# static pod with a hostPath mount of this directory, deleting and recreating
+# it would leave the pod's mount pointing at the old, deleted directory.
+RuntimeDirectory=kmsplugin
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+
+# The only device the plugin can open is the TPM resource manager. Don't add
+# PrivateDevices=yes: it would hide /dev/tpmrm0.
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+
+# Hardening. The plugin needs outbound HTTPS, its unix socket, and the TPM.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# Don't deny @resources: the Go runtime calls setrlimit at startup.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# The socket ends up 0700 and owned by the dynamic user; kube-apiserver running
+# as root (the default for kubeadm static pods) can still connect to it.
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
