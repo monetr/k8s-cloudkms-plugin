@@ -56,10 +56,6 @@ var (
 	jwtSubject    = flag.String("jwt-subject", "", "`sub` claim of the signed JWT. Defaults to the hostname.")
 	jwtLifetime   = flag.Duration("jwt-lifetime", 5*time.Minute, "Lifetime of each TPM-signed JWT. It is only used for the STS exchange, so keep it short.")
 	impersonateSA = flag.String("impersonate-service-account", "", "Optional service account email to impersonate. If empty, the federated identity is used directly and must be granted access to the key.")
-
-	// Integration testing arguments.
-	integrationTest = flag.Bool("integration-test", false, "When set to true, http.DefaultClient will be used, as opposed callers identity acquired with a TokenService.")
-	fakeKMSPort     = flag.Int("fake-kms-port", 8085, "Port for Fake KMS, only use in integration tests.")
 )
 
 func main() {
@@ -70,28 +66,17 @@ func main() {
 	flag.Parse()
 	mustValidateFlags()
 
-	var (
-		httpClient = http.DefaultClient
-		err        error
-	)
-
-	if !*integrationTest {
-		// httpClient should be constructed with context.Background. Sending a context with
-		// timeout or deadline will cause subsequent calls via the client to fail once the timeout or
-		// deadline is triggered. Instead, the plugin supplies a context per individual calls.
-		httpClient, err = newTPMHTTPClient(context.Background())
-		if err != nil {
-			glog.Exitf("failed to instantiate http httpClient: %v", err)
-		}
+	// httpClient should be constructed with context.Background. Sending a context with
+	// timeout or deadline will cause subsequent calls via the client to fail once the timeout or
+	// deadline is triggered. Instead, the plugin supplies a context per individual calls.
+	httpClient, err := newTPMHTTPClient(context.Background())
+	if err != nil {
+		glog.Exitf("failed to instantiate http httpClient: %v", err)
 	}
 
 	kms, err := cloudkms.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		glog.Exitf("failed to instantiate cloud kms httpClient: %v", err)
-	}
-
-	if *integrationTest {
-		kms.BasePath = fmt.Sprintf("http://localhost:%d", *fakeKMSPort)
 	}
 
 	metrics := &plugin.Metrics{
@@ -224,7 +209,7 @@ func mustValidateFlags() {
 	if *kmsVersion == "v1" && *keySuffix != "" {
 		glog.Exitf("--key-suffix argument cannot be used in v1 mode (--kms=v1)")
 	}
-	if !*integrationTest && (*wifProvider == "" || *jwtIssuer == "") {
+	if *wifProvider == "" || *jwtIssuer == "" {
 		glog.Exitf("--wif-provider and --jwt-issuer are required")
 	}
 	glog.Infof("Checking socket path %q", *pathToUnixSocket)
