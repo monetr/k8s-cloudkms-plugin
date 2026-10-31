@@ -29,11 +29,17 @@ type JWTSupplier struct {
 	Subject string
 	// Audience is the `aud` claim; the provider's allowed audience.
 	Audience string
-	// Lifetime of each JWT. Only needs to outlive the STS exchange.
+	// Lifetime of each JWT. Only needs to outlive the STS exchange. At most
+	// MaxLifetime.
 	Lifetime time.Duration
 
 	mu sync.Mutex
 }
+
+// MaxLifetime is the longest lifetime a JWT may be signed with. A leaked JWT
+// can be exchanged for access tokens until it expires, so this bounds how long
+// one stays useful.
+const MaxLifetime = time.Hour
 
 var _ externalaccount.SubjectTokenSupplier = (*JWTSupplier)(nil)
 
@@ -42,8 +48,8 @@ func (s *JWTSupplier) SubjectToken(ctx context.Context, _ externalaccount.Suppli
 	if s.Issuer == "" || s.Subject == "" || s.Audience == "" {
 		return "", errors.New("tpmkey: issuer, subject and audience must all be set")
 	}
-	if s.Lifetime <= 0 {
-		return "", errors.New("tpmkey: lifetime must be positive")
+	if s.Lifetime <= 0 || s.Lifetime > MaxLifetime {
+		return "", fmt.Errorf("tpmkey: lifetime must be positive and at most %s", MaxLifetime)
 	}
 
 	// TPM transports are not safe for concurrent use.

@@ -271,7 +271,7 @@ replaces with the following:
 | `--wif-provider` | *(required)* | Provider resource name: `projects/NUM/locations/global/workloadIdentityPools/POOL/providers/PROVIDER`. |
 | `--jwt-issuer` | *(required)* | `iss` claim. Must match the provider's issuer URI. |
 | `--jwt-subject` | hostname | `sub` claim. Mapped to `google.subject`. |
-| `--jwt-lifetime` | `5m` | Lifetime of each TPM-signed JWT. It is only used for the STS exchange. |
+| `--jwt-lifetime` | `5m` | Lifetime of each TPM-signed JWT, at most `1h`. It is only used for the STS exchange. |
 | `--path-to-tpm` | `/dev/tpmrm0` | TPM resource manager device. |
 | `--tpm-key-handle` | `0x81010101` | Persistent handle of the key created by `tpm-wif-key`. |
 | `--impersonate-service-account` | *(none)* | Optional service account email to impersonate. If empty, the pool identity is used directly, as in the IAM examples above. |
