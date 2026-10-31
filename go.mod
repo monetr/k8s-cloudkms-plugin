@@ -45,3 +45,5 @@ require (
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	k8s.io/apimachinery v0.29.2 // indirect
 )
+
+replace github.com/golang/glog => ./internal/glog
