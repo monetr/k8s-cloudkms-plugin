@@ -2,4 +2,4 @@
 // glog with this module, so upstream's code logs through log/slog unchanged.
 module github.com/golang/glog
 
-go 1.21
+go 1.27.0

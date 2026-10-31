@@ -71,7 +71,6 @@ jobs:
         # Control-plane nodes may be amd64 or arm64, and the TPM signature
         # handling is byte-level code worth running natively on both.
         include:
-          - { go: oldstable, arch: amd64, runs-on: ubuntu-latest }
           - { go: stable, arch: amd64, runs-on: ubuntu-latest }
           - { go: stable, arch: arm64, runs-on: ubuntu-24.04-arm }
     steps:

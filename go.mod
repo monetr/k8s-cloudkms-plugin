@@ -1,6 +1,6 @@
 module github.com/monetr/k8s-cloudkms-plugin
 
-go 1.26.0
+go 1.27.0
 
 require (
 	github.com/GoogleCloudPlatform/k8s-cloudkms-plugin v0.0.0-20260514213521-a88bafe6cfcc
