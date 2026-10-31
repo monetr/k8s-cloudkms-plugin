@@ -261,10 +261,26 @@ encrypt or decrypt.
 If you run it as a static pod or container next to `kube-apiserver`, mount
 `/dev/tpmrm0` into it and run it as a user or group that can open the device.
 
+### Checking health
+
+Nothing calls the health check automatically; it's there for debugging by
+hand. It listens on a unix socket rather than a port, so run it as root on
+the node:
+
+```sh
+# Plugin answers on its gRPC socket and has encrypt/decrypt permission on the key.
+sudo curl --unix-socket /var/run/kmsplugin/healthz.sock http://localhost/healthz
+
+# Also does a real Encrypt/Decrypt round trip through Cloud KMS.
+sudo curl --unix-socket /var/run/kmsplugin/healthz.sock 'http://localhost/healthz?ping-kms=true'
+```
+
+Either prints `ok` when healthy, or an error with a non-200 status.
+
 ### Flags
 
-All upstream flags are supported except `--gce-config`, which this wrapper
-replaces with the following:
+All upstream flags are supported except `--gce-config` and `--healthz-port`.
+This wrapper adds the following:
 
 | Flag | Default | Description |
 | --- | --- | --- |
@@ -274,6 +290,7 @@ replaces with the following:
 | `--jwt-lifetime` | `5m` | Lifetime of each TPM-signed JWT, at most `1h`. It is only used for the STS exchange. |
 | `--path-to-tpm` | `/dev/tpmrm0` | TPM resource manager device. |
 | `--tpm-key-handle` | `0x81010101` | Persistent handle of the key created by `tpm-wif-key`. |
+| `--healthz-socket` | `/var/run/kmsplugin/healthz.sock` | Unix socket for healthz, replacing upstream's TCP port. Each request makes Cloud KMS calls as this node, so it isn't exposed on the network or to other local users. See [Checking health](#checking-health). |
 | `--impersonate-service-account` | *(none)* | Optional service account email to impersonate. If empty, the pool identity is used directly, as in the IAM examples above. |
 
 The JWT's `aud` is the provider's default allowed audience,

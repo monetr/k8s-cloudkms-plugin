@@ -11,6 +11,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,7 +37,7 @@ import (
 )
 
 var (
-	healthzPort    = flag.Int("healthz-port", 8081, "Port on which to publish healthz")
+	healthzSocket  = flag.String("healthz-socket", "/var/run/kmsplugin/healthz.sock", "Unix socket on which to publish healthz. Not a TCP port, because each request makes Cloud KMS calls as this node.")
 	healthzPath    = flag.String("healthz-path", "healthz", "Path at which to publish healthz")
 	healthzTimeout = flag.Duration("healthz-timeout", 5*time.Second, "timeout in seconds for communicating with the unix socket")
 
@@ -102,7 +103,6 @@ func main() {
 	}
 
 	hc := plugin.NewHealthChecker(healthChecker, *keyURI, kms.Projects.Locations.KeyRings.CryptoKeys, *pathToUnixSocket, *healthzTimeout, &url.URL{
-		Host: fmt.Sprintf("localhost:%d", *healthzPort),
 		Path: *healthzPath,
 	})
 
@@ -177,12 +177,35 @@ func externalAccountConfig(
 	return conf
 }
 
+// serveHealthz serves upstream's healthz handler on a unix socket instead of
+// upstream's TCP port. Every request makes Cloud KMS calls as this node, so it
+// must not be reachable by any local process; a socket keeps it to whoever the
+// file mode allows (the service's UMask=0077 makes that root and the plugin).
+func serveHealthz(h *plugin.HealthCheckerManager, socketPath, path string) chan error {
+	errCh := make(chan error, 1)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		errCh <- fmt.Errorf("failed to remove stale healthz socket: %w", err)
+		return errCh
+	}
+	listener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		errCh <- fmt.Errorf("failed to listen for healthz: %w", err)
+		return errCh
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+path, h.HandlerFunc)
+	glog.Infof("Registering healthz listener at unix://%s/%s", socketPath, path)
+	go func() { errCh <- http.Serve(listener, mux) }()
+	return errCh
+}
+
 func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m *plugin.Metrics) error {
 	signalsChan := make(chan os.Signal, 1)
 	signal.Notify(signalsChan, syscall.SIGINT, syscall.SIGTERM)
 
 	metricsErrCh := m.Serve()
-	healthzErrCh := h.Serve()
+	healthzErrCh := serveHealthz(h, *healthzSocket, *healthzPath)
 
 	gRPCSrv, kmsErrorCh := pluginManager.Start()
 	defer gRPCSrv.GracefulStop()
