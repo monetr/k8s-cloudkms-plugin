@@ -98,7 +98,7 @@ jobs:
       # Binds each binary's digest to this repo/commit/workflow run so consumers
       # can run `gh attestation verify <binary> --repo monetr/k8s-cloudkms-plugin`.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           # The binaries only; the .sha256 sidecars end in ".sha256".
           subject-path: dist/*-linux-${{ matrix.goarch }}
