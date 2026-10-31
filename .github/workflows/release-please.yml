@@ -1,0 +1,138 @@
+name: Release
+on:
+  push:
+    branches: [main]
+
+# Least-privilege default for the workflow; each job opts into exactly the
+# write scopes it needs and nothing more.
+permissions:
+  contents: read
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      # Full tag, e.g. v0.5.3 or v0.5.3-rc.1. Reconstructing it from
+      # major.minor.patch drops any prerelease suffix.
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      # Released commit. The git tag does not exist until the draft release is
+      # published, so downstream jobs build from this SHA instead of the tag.
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      # release-please maintains a "release" PR with an updated CHANGELOG.md from
+      # Conventional Commits. draft:true in the config means the release opens as
+      # a draft so the jobs below can attach binaries; publish-release then flips
+      # it live. GitHub freezes a release and its assets together at publish, so
+      # assets cannot be added to an already-published (immutable) release.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+        id: release
+        with:
+          config-file: .github/release-please-config.json
+          manifest-file: .github/.release-please-manifest.json
+
+  release-binaries:
+    name: Binaries (linux/${{ matrix.goarch }})
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      # Attach assets to the GitHub Release release-please created.
+      contents: write
+      # Keyless Sigstore signing of the provenance, via the run's OIDC identity.
+      id-token: write
+      # Record the build-provenance attestation for each binary.
+      attestations: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux only: the plugin talks to the TPM through /dev/tpmrm0 and runs
+        # next to kube-apiserver on control-plane nodes, which may be either
+        # architecture. cgo is only needed by the TPM simulator in tests, so the
+        # binaries cross-compile cleanly from one runner.
+        goarch: [amd64, arm64]
+    steps:
+      - name: Check out the released commit
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Build the released commit by SHA: the git tag does not exist yet
+          # while the release is still a draft.
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: stable
+
+      - name: Build and checksum
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          # Raw, directly-runnable binaries (no tar/zip) plus a .sha256 sidecar
+          # each, so they can be downloaded straight to /usr/local/bin as the
+          # systemd unit expects. Both are shipped: tpm-wif-key provisions the
+          # TPM key once per node, k8s-cloudkms-plugin is the long-running service.
+          mkdir -p dist
+          for cmd in k8s-cloudkms-plugin tpm-wif-key; do
+            name="${cmd}-${TAG}-${GOOS}-${GOARCH}"
+            # -trimpath drops local filesystem paths; -s -w strips the symbol and
+            # DWARF tables so release binaries are smaller. CGO is off so every
+            # binary is static and dependency-free.
+            go build -trimpath -ldflags="-s -w" -o "dist/$name" "./cmd/$cmd"
+            # Checksum from inside dist/ so `sha256sum -c` works next to the
+            # downloaded binary.
+            (cd dist && sha256sum "$name" > "${name}.sha256")
+          done
+          ls -l dist
+
+      # Binds each binary's digest to this repo/commit/workflow run so consumers
+      # can run `gh attestation verify <binary> --repo monetr/k8s-cloudkms-plugin`.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          # The binaries only; the .sha256 sidecars end in ".sha256".
+          subject-path: dist/*-linux-${{ matrix.goarch }}
+
+      - name: Attach to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # --clobber so re-running the job replaces assets instead of failing.
+        run: gh release upload "$TAG" dist/* --clobber
+
+  publish-release:
+    name: Publish release
+    needs: [release-please, release-binaries]
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Flip the draft release to published.
+      contents: write
+    env:
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+      # gh needs a repo context; this job has no checkout to infer one from.
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # Runs only after every binary job succeeded, so an incomplete release is
+      # never published -- it stays a draft to investigate. Publishing freezes
+      # the release and its assets together (immutable). A SemVer-prerelease tag
+      # (e.g. v0.5.3-rc.1) is published as a prerelease and never marked Latest;
+      # a final vX.Y.Z is the inverse.
+      - name: Publish the GitHub Release
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            *-*) gh release edit "$TAG" --draft=false --prerelease --latest=false ;;
+            *)   gh release edit "$TAG" --draft=false --prerelease=false --latest ;;
+          esac
