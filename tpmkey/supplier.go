@@ -32,6 +32,13 @@ type JWTSupplier struct {
 	// Lifetime of each JWT. Only needs to outlive the STS exchange. At most
 	// MaxLifetime.
 	Lifetime time.Duration
+	// Policy is the boot-state policy the key was created with. The zero
+	// value is right for keys that are not bound to boot state.
+	Policy Policy
+	// SignedPCRPolicyPath is the signed PCR policy file (systemd's
+	// tpm2-pcr-signature.json). It is read on every signature, and only used
+	// when Policy.PCRSigner is set.
+	SignedPCRPolicyPath string
 
 	mu sync.Mutex
 }
@@ -50,6 +57,13 @@ func (s *JWTSupplier) SubjectToken(ctx context.Context, _ externalaccount.Suppli
 	}
 	if s.Lifetime <= 0 || s.Lifetime > MaxLifetime {
 		return "", fmt.Errorf("tpmkey: lifetime must be positive and at most %s", MaxLifetime)
+	}
+	var signed []SignedPCRPolicy
+	if s.Policy.PCRSigner != nil {
+		var err error
+		if signed, err = ReadSignedPCRPolicies(s.SignedPCRPolicyPath); err != nil {
+			return "", fmt.Errorf("tpmkey: %w", err)
+		}
 	}
 
 	// TPM transports are not safe for concurrent use.
@@ -94,7 +108,7 @@ func (s *JWTSupplier) SubjectToken(ctx context.Context, _ externalaccount.Suppli
 	enc := base64.RawURLEncoding
 	signingInput := enc.EncodeToString(header) + "." + enc.EncodeToString(claims)
 	digest := sha256.Sum256([]byte(signingInput))
-	sig, err := sign(tpm, s.Handle, name, digest[:])
+	sig, err := sign(tpm, s.Handle, name, digest[:], s.Policy, signed)
 	if err != nil {
 		return "", fmt.Errorf("tpmkey: %w", err)
 	}

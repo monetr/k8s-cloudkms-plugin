@@ -1,0 +1,20 @@
+{
+	"sha256" : [
+		{
+			"pcrs" : [
+				11
+			],
+			"pkfp" : "a12856c6a0b9db8687d31503b81bd501cf699d1630eda9f2e181fa82467bf47a",
+			"pol" : "0bdc157c26e63c59bb8d4140137d1dcffdd2ddd01afa5ac16c6c03f25bc36f35",
+			"sig" : "d60zgMYPG1ZUbeLNyxIahm41bk6tSHP6Sgek81IukVBld9ucSJ8+cj0XbY0g7GdsLUHRjWbIoINYvjqLC4G/Gqlv8a78Ck2wGRJapc67mbnb/TeCtgr4NEs3mNQVZLnE2w0pRmF3BJshCJmbV7lAudzhbqbbrM0iCFo++bZc1/jVoY80idwADf69XGeENMGQLgvPOHBozwJ48CRvQhw8Q9V2aCGy1GnDmkPE8+lEGDD8TqSshP/Gjk7AA8IZD+fBdBKrB8qW1hxWXYRqbzOuFQC+OHOSCChSKrPG1jeH7/6ApAWoKUwEd/+j2luRVgDqhcV8GOpzmTBzbdUZF4kCRg=="
+		},
+		{
+			"pcrs" : [
+				11
+			],
+			"pkfp" : "a12856c6a0b9db8687d31503b81bd501cf699d1630eda9f2e181fa82467bf47a",
+			"pol" : "bd6ceed2611d379286bdfede87b39aff380b665cb7b2288bd3535376bb03c1c3",
+			"sig" : "bvNMSaX4h+N65IflNQ8CgPGtMPKbZnThDsCN4cPEg9KNyIh9rmWAvC1OZ3CvB/yMKFv5VdtOUJ5Bqz2naVQzJ/kMkpXI6bd51L5dJ8swWaKT/T5iocjWlCkUDSHA3rhdZdnyiESfkcFvj4GFnnPmaNOpJXPZcOkALM7SixYj7b9VWtDukgmPyKoKBGm6+8As8yFZTjM2Zb7+ax6hCxHcPElUx4zYJGE8b+/4uRzLsz1mOcaDd9gjTeJQIYK6AnVoOf4apmbX8W3tJ15cfmvA4OrXsTqPQh8H5+3evcy2GkgXSNr4fes5xy2bje037WqUYBaJz1jCfyYDzI/EoQJKKQ=="
+		}
+	]
+}

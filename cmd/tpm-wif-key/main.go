@@ -4,6 +4,7 @@
 //
 //	tpm-wif-key create   # generate + persist the key, print its JWKS
 //	tpm-wif-key jwks     # print the JWKS of an existing key
+//	tpm-wif-key check    # check the key's PCR policy against the current boot
 package main
 
 import (
@@ -20,8 +21,8 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 || (os.Args[1] != "create" && os.Args[1] != "jwks") {
-		fmt.Fprintf(os.Stderr, "usage: %s create|jwks [-path-to-tpm /dev/tpmrm0] [-tpm-key-handle 0x%x]\n", os.Args[0], uint32(tpmkey.DefaultHandle))
+	if len(os.Args) < 2 || (os.Args[1] != "create" && os.Args[1] != "jwks" && os.Args[1] != "check") {
+		fmt.Fprintf(os.Stderr, "usage: %s create|jwks|check [-path-to-tpm /dev/tpmrm0] [-tpm-key-handle 0x%x] [-pcrs 7] [-pcr-public-key key.pem] [-pcr-signature file.json]\n", os.Args[0], uint32(tpmkey.DefaultHandle))
 		os.Exit(2)
 	}
 	cmd := os.Args[1]
@@ -29,11 +30,18 @@ func main() {
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	pathToTPM := fs.String("path-to-tpm", "/dev/tpmrm0", "Path to the TPM resource manager device.")
 	handleFlag := fs.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle for the signing key.")
+	pcrsFlag := fs.String("pcrs", "", "create/check: comma-separated PCRs (SHA-256 bank) to bind the key to at their current values, e.g. 7.")
+	pcrPublicKey := fs.String("pcr-public-key", "", "create/check: PEM RSA public key; the key accepts PCR policies signed by it (systemd/ukify signed PCR 11 policies).")
+	pcrSignature := fs.String("pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "check: signed PCR policies for the booted UKI. Only used with -pcr-public-key.")
 	_ = fs.Parse(os.Args[2:])
 
 	handle, err := strconv.ParseUint(*handleFlag, 0, 32)
 	if err != nil {
 		fatalf("invalid -tpm-key-handle %q: %v", *handleFlag, err)
+	}
+	policy, err := parsePolicy(*pcrsFlag, *pcrPublicKey)
+	if err != nil {
+		fatalf("%v", err)
 	}
 
 	tpm, err := linuxtpm.Open(*pathToTPM)
@@ -45,9 +53,25 @@ func main() {
 	var pub *ecdsa.PublicKey
 	switch cmd {
 	case "create":
-		pub, err = tpmkey.Create(tpm, tpm2.TPMHandle(handle))
+		var values [][]byte
+		pub, values, err = tpmkey.CreateWithPolicy(tpm, tpm2.TPMHandle(handle), policy)
+		if err == nil {
+			describePolicy(policy, values)
+		}
 	case "jwks":
 		pub, _, err = tpmkey.Public(tpm, tpm2.TPMHandle(handle))
+	case "check":
+		var signed []tpmkey.SignedPCRPolicy
+		if policy.PCRSigner != nil {
+			if signed, err = tpmkey.ReadSignedPCRPolicies(*pcrSignature); err != nil {
+				fatalf("%v", err)
+			}
+		}
+		if err := tpmkey.Check(tpm, tpm2.TPMHandle(handle), policy, signed); err != nil {
+			fatalf("%v", err)
+		}
+		fmt.Fprintf(os.Stderr, "key at handle 0x%x is usable in the current boot state\n", handle)
+		return
 	}
 	if err != nil {
 		fatalf("%v", err)
@@ -62,6 +86,39 @@ func main() {
 		fatalf("%v", err)
 	}
 	fmt.Println(string(out))
+}
+
+func parsePolicy(pcrs, publicKeyPath string) (tpmkey.Policy, error) {
+	var p tpmkey.Policy
+	var err error
+	if p.PCRs, err = tpmkey.ParsePCRList(pcrs); err != nil {
+		return p, fmt.Errorf("invalid -pcrs: %w", err)
+	}
+	if publicKeyPath != "" {
+		data, err := os.ReadFile(publicKeyPath)
+		if err != nil {
+			return p, fmt.Errorf("failed to read -pcr-public-key: %w", err)
+		}
+		if p.PCRSigner, err = tpmkey.ParseRSAPublicKeyPEM(data); err != nil {
+			return p, fmt.Errorf("invalid -pcr-public-key: %w", err)
+		}
+	}
+	return p, nil
+}
+
+// describePolicy reports what a new key was bound to on stderr, keeping
+// stdout clean for the JWKS.
+func describePolicy(p tpmkey.Policy, values [][]byte) {
+	if !p.Bound() {
+		fmt.Fprintln(os.Stderr, "key is not bound to boot state")
+		return
+	}
+	for i, pcr := range p.PCRs {
+		fmt.Fprintf(os.Stderr, "bound to PCR %d (sha256) = %x\n", pcr, values[i])
+	}
+	if p.PCRSigner != nil {
+		fmt.Fprintf(os.Stderr, "bound to PCR policies signed by RSA key with fingerprint %x\n", tpmkey.PublicKeyFingerprint(p.PCRSigner))
+	}
 }
 
 func fatalf(format string, args ...any) {

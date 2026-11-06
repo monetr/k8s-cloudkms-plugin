@@ -18,6 +18,12 @@ After=network-online.target
 # kube-apiserver can't read or write secrets until the plugin is up, and on
 # kubeadm-style clusters kube-apiserver is a static pod started by kubelet.
 Before=kubelet.service
+# Uncomment if the TPM key accepts signed PCR 11 policies (--tpm-pcr-public-key).
+# PCR 11 only reaches the "ready" value those policies are signed for once
+# systemd-pcrphase.service has run, and this also stops the plugin before PCR
+# 11 moves on to "shutdown". It doesn't conflict with Before=kubelet.service,
+# and on boots without a UKI that unit is skipped, so this doesn't delay them.
+#After=systemd-pcrphase.service
 
 [Service]
 Type=simple

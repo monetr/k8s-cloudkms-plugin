@@ -115,7 +115,7 @@ func setup(t *testing.T) (func() (transport.TPMCloser, error), tpm2.TPMHandle, *
 func TestExternalAccountConfigDirect(t *testing.T) {
 	open, handle, fake, srv := setup(t)
 
-	conf := externalAccountConfig(open, handle, testProvider, testIssuer, testSubject, 5*time.Minute, "")
+	conf := externalAccountConfig(open, handle, tpmkey.Policy{}, "", testProvider, testIssuer, testSubject, 5*time.Minute, "")
 	if conf.ServiceAccountImpersonationURL != "" {
 		t.Fatalf("impersonation configured without a service account: %s", conf.ServiceAccountImpersonationURL)
 	}
@@ -145,7 +145,7 @@ func TestExternalAccountConfigDirect(t *testing.T) {
 func TestExternalAccountConfigImpersonation(t *testing.T) {
 	open, handle, fake, srv := setup(t)
 
-	conf := externalAccountConfig(open, handle, testProvider, testIssuer, testSubject, 5*time.Minute, testServiceAccount)
+	conf := externalAccountConfig(open, handle, tpmkey.Policy{}, "", testProvider, testIssuer, testSubject, 5*time.Minute, testServiceAccount)
 	const wantURL = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/" + testServiceAccount + ":generateAccessToken"
 	if conf.ServiceAccountImpersonationURL != wantURL {
 		t.Fatalf("impersonation URL = %s, want %s", conf.ServiceAccountImpersonationURL, wantURL)

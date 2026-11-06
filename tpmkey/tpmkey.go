@@ -47,12 +47,44 @@ var signingTemplate = tpm2.TPMTPublic{
 	}),
 }
 
-// Create generates a new signing key inside the TPM under a freshly derived
-// storage root key and persists it at handle. It refuses to overwrite a key
-// that already exists at handle.
+// Create generates a new signing key that is not bound to any boot state. See
+// CreateWithPolicy.
 func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) {
+	pub, _, err := CreateWithPolicy(tpm, handle, Policy{})
+	return pub, err
+}
+
+// CreateWithPolicy generates a new signing key inside the TPM under a freshly
+// derived storage root key and persists it at handle. It refuses to overwrite
+// a key that already exists at handle.
+//
+// If p is bound, the key can only be used through a policy session that
+// satisfies p (see Policy). It returns the values p.PCRs were bound to.
+func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy) (*ecdsa.PublicKey, [][]byte, error) {
 	if _, err := (tpm2.ReadPublic{ObjectHandle: handle}).Execute(tpm); err == nil {
-		return nil, fmt.Errorf("a key already exists at handle 0x%x", uint32(handle))
+		return nil, nil, fmt.Errorf("a key already exists at handle 0x%x", uint32(handle))
+	}
+
+	template := signingTemplate
+	var values [][]byte
+	if p.Bound() {
+		if len(p.PCRs) > 0 {
+			var err error
+			if values, err = ReadPCRs(tpm, p.PCRs); err != nil {
+				return nil, nil, err
+			}
+			if err := checkNotReset(p.PCRs, values); err != nil {
+				return nil, nil, err
+			}
+		}
+		digest, err := authPolicy(p, values)
+		if err != nil {
+			return nil, nil, err
+		}
+		template.AuthPolicy = tpm2.TPM2BDigest{Buffer: digest}
+		// Without this, the empty password would also satisfy the USER role
+		// for TPM2_Sign, bypassing the policy entirely.
+		template.ObjectAttributes.UserWithAuth = false
 	}
 
 	srk, err := tpm2.CreatePrimary{
@@ -60,17 +92,17 @@ func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) 
 		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
 	}.Execute(tpm)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create storage root key: %w", err)
+		return nil, nil, fmt.Errorf("failed to create storage root key: %w", err)
 	}
 	defer tpm2.FlushContext{FlushHandle: srk.ObjectHandle}.Execute(tpm)
 	parent := tpm2.NamedHandle{Handle: srk.ObjectHandle, Name: srk.Name}
 
 	created, err := tpm2.Create{
 		ParentHandle: parent,
-		InPublic:     tpm2.New2B(signingTemplate),
+		InPublic:     tpm2.New2B(template),
 	}.Execute(tpm)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create signing key: %w", err)
+		return nil, nil, fmt.Errorf("failed to create signing key: %w", err)
 	}
 
 	loaded, err := tpm2.Load{
@@ -79,7 +111,7 @@ func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) 
 		InPublic:     created.OutPublic,
 	}.Execute(tpm)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load signing key: %w", err)
+		return nil, nil, fmt.Errorf("failed to load signing key: %w", err)
 	}
 	defer tpm2.FlushContext{FlushHandle: loaded.ObjectHandle}.Execute(tpm)
 
@@ -88,53 +120,116 @@ func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) 
 		ObjectHandle:     tpm2.NamedHandle{Handle: loaded.ObjectHandle, Name: loaded.Name},
 		PersistentHandle: handle,
 	}).Execute(tpm); err != nil {
-		return nil, fmt.Errorf("failed to persist signing key at handle 0x%x: %w", uint32(handle), err)
+		return nil, nil, fmt.Errorf("failed to persist signing key at handle 0x%x: %w", uint32(handle), err)
 	}
 
 	pub, _, err := Public(tpm, handle)
-	return pub, err
+	return pub, values, err
+}
+
+// KeyInfo describes the key at a persistent handle.
+type KeyInfo struct {
+	Public *ecdsa.PublicKey
+	Name   tpm2.TPM2BName
+	// AuthPolicy is empty for a key that is not bound to boot state.
+	AuthPolicy []byte
+	// UserWithAuth is true if the key can be used with its (empty) password.
+	UserWithAuth bool
 }
 
 // Public reads the public half of the key at handle and verifies that it has
 // the non-exportable signing attributes this package relies on.
 func Public(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, tpm2.TPM2BName, error) {
+	info, err := Inspect(tpm, handle)
+	return info.Public, info.Name, err
+}
+
+// Inspect is Public, plus the key's authorization policy.
+func Inspect(tpm transport.TPM, handle tpm2.TPMHandle) (KeyInfo, error) {
 	rsp, err := tpm2.ReadPublic{ObjectHandle: handle}.Execute(tpm)
 	if err != nil {
-		return nil, tpm2.TPM2BName{}, fmt.Errorf("failed to read key at handle 0x%x: %w", uint32(handle), err)
+		return KeyInfo{}, fmt.Errorf("failed to read key at handle 0x%x: %w", uint32(handle), err)
 	}
 	public, err := rsp.OutPublic.Contents()
 	if err != nil {
-		return nil, tpm2.TPM2BName{}, fmt.Errorf("failed to decode public area: %w", err)
+		return KeyInfo{}, fmt.Errorf("failed to decode public area: %w", err)
 	}
 
 	attrs := public.ObjectAttributes
 	if public.Type != tpm2.TPMAlgECC || !attrs.FixedTPM || !attrs.FixedParent || !attrs.SensitiveDataOrigin || !attrs.SignEncrypt || attrs.Decrypt || attrs.Restricted {
-		return nil, tpm2.TPM2BName{}, errors.New("key is not a non-exportable, unrestricted ECC signing key")
+		return KeyInfo{}, errors.New("key is not a non-exportable, unrestricted ECC signing key")
 	}
 	params, err := public.Parameters.ECCDetail()
 	if err != nil {
-		return nil, tpm2.TPM2BName{}, err
+		return KeyInfo{}, err
 	}
 	if params.CurveID != tpm2.TPMECCNistP256 {
-		return nil, tpm2.TPM2BName{}, errors.New("key is not on the NIST P-256 curve")
+		return KeyInfo{}, errors.New("key is not on the NIST P-256 curve")
 	}
 
 	pub, err := tpm2.Pub(*public)
 	if err != nil {
-		return nil, tpm2.TPM2BName{}, err
+		return KeyInfo{}, err
 	}
 	ecPub, ok := pub.(*ecdsa.PublicKey)
 	if !ok {
-		return nil, tpm2.TPM2BName{}, errors.New("key is not an ECDSA key")
+		return KeyInfo{}, errors.New("key is not an ECDSA key")
 	}
-	return ecPub, rsp.Name, nil
+	return KeyInfo{
+		Public:       ecPub,
+		Name:         rsp.Name,
+		AuthPolicy:   public.AuthPolicy.Buffer,
+		UserWithAuth: attrs.UserWithAuth,
+	}, nil
 }
 
 // sign asks the TPM to sign a SHA-256 digest and returns the signature in the
-// fixed-width r||s form JWS ES256 requires.
-func sign(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest []byte) ([]byte, error) {
+// fixed-width r||s form JWS ES256 requires. If p is bound, the key is used
+// through a policy session satisfying p; signed holds the signed PCR policies
+// to choose from when p.PCRSigner is set.
+func sign(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest []byte, p Policy, signed []SignedPCRPolicy) ([]byte, error) {
+	if !p.Bound() {
+		return signWith(tpm, tpm2.AuthHandle{Handle: handle, Name: name, Auth: tpm2.PasswordAuth(nil)}, digest)
+	}
+
+	var approved *SignedPCRPolicy
+	if p.PCRSigner != nil {
+		var err error
+		if approved, err = matchSignedPolicy(tpm, p.PCRSigner, signed); err != nil {
+			return nil, err
+		}
+	}
+
+	for attempt := 1; ; attempt++ {
+		sig, err := signWithPolicy(tpm, handle, name, digest, p, approved)
+		switch {
+		case errors.Is(err, tpm2.TPMRCPCRChanged) && attempt < pcrPolicyRetries:
+			continue // Some PCR was extended mid-way; the session is spent, so start over.
+		case errors.Is(err, tpm2.TPMRCPolicyFail):
+			return nil, fmt.Errorf("TPM key policy not satisfied: %s: %w", mismatchReason(p), err)
+		}
+		return sig, err
+	}
+}
+
+func signWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest []byte, p Policy, approved *SignedPCRPolicy) ([]byte, error) {
+	// Neither the digest being signed nor the policy is secret, so the session
+	// is deliberately unsalted and unbound.
+	sess, closeSession, err := tpm2.PolicySession(tpm, tpm2.TPMAlgSHA256, 16)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start policy session: %w", err)
+	}
+	defer closeSession()
+
+	if err := satisfyPolicy(tpm, sess, p, approved); err != nil {
+		return nil, err
+	}
+	return signWith(tpm, tpm2.AuthHandle{Handle: handle, Name: name, Auth: sess}, digest)
+}
+
+func signWith(tpm transport.TPM, key tpm2.AuthHandle, digest []byte) ([]byte, error) {
 	rsp, err := tpm2.Sign{
-		KeyHandle:  tpm2.NamedHandle{Handle: handle, Name: name},
+		KeyHandle:  key,
 		Digest:     tpm2.TPM2BDigest{Buffer: digest},
 		InScheme:   tpm2.TPMTSigScheme{Scheme: tpm2.TPMAlgNull},
 		Validation: tpm2.TPMTTKHashCheck{Tag: tpm2.TPMSTHashCheck, Hierarchy: tpm2.TPMRHNull},

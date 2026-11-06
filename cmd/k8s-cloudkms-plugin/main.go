@@ -57,6 +57,11 @@ var (
 	jwtSubject    = flag.String("jwt-subject", "", "`sub` claim of the signed JWT. Defaults to the hostname.")
 	jwtLifetime   = flag.Duration("jwt-lifetime", 5*time.Minute, "Lifetime of each TPM-signed JWT. It is only used for the STS exchange, so keep it short.")
 	impersonateSA = flag.String("impersonate-service-account", "", "Optional service account email to impersonate. If empty, the federated identity is used directly and must be granted access to the key.")
+
+	// Boot-state (PCR) binding. These must match how the key was created.
+	tpmKeyPCRs      = flag.String("tpm-key-pcrs", "", "Comma-separated PCRs the key was bound to with `tpm-wif-key create -pcrs` (ex. 7). Must match the key.")
+	tpmPCRPublicKey = flag.String("tpm-pcr-public-key", "", "PEM RSA public key the key was bound to with `tpm-wif-key create -pcr-public-key`. Enables signed PCR policies.")
+	tpmPCRSignature = flag.String("tpm-pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "Signed PCR policies for the booted UKI. Only used with --tpm-pcr-public-key.")
 )
 
 func main() {
@@ -128,9 +133,20 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 		}
 	}
 
-	conf := externalAccountConfig(func() (transport.TPMCloser, error) {
+	policy, err := tpmPolicy()
+	if err != nil {
+		return nil, err
+	}
+	open := func() (transport.TPMCloser, error) {
 		return linuxtpm.Open(*pathToTPM)
-	}, tpm2.TPMHandle(handle), *wifProvider, *jwtIssuer, subject, *jwtLifetime, *impersonateSA)
+	}
+	// Turn a mismatched policy or a changed boot state into a clear error,
+	// rather than the TPM failure the first signature would give.
+	if err := checkTPMPolicy(open, tpm2.TPMHandle(handle), policy); err != nil {
+		return nil, err
+	}
+
+	conf := externalAccountConfig(open, tpm2.TPMHandle(handle), policy, *tpmPCRSignature, *wifProvider, *jwtIssuer, subject, *jwtLifetime, *impersonateSA)
 
 	ts, err := externalaccount.NewTokenSource(ctx, conf)
 	if err != nil {
@@ -146,11 +162,51 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 	return oauth2.NewClient(ctx, ts), nil
 }
 
+// tpmPolicy builds the key's boot-state policy from the --tpm-key-pcrs and
+// --tpm-pcr-public-key flags.
+func tpmPolicy() (tpmkey.Policy, error) {
+	var p tpmkey.Policy
+	var err error
+	if p.PCRs, err = tpmkey.ParsePCRList(*tpmKeyPCRs); err != nil {
+		return p, fmt.Errorf("invalid --tpm-key-pcrs: %w", err)
+	}
+	if *tpmPCRPublicKey != "" {
+		data, err := os.ReadFile(*tpmPCRPublicKey)
+		if err != nil {
+			return p, fmt.Errorf("failed to read --tpm-pcr-public-key: %w", err)
+		}
+		if p.PCRSigner, err = tpmkey.ParseRSAPublicKeyPEM(data); err != nil {
+			return p, fmt.Errorf("invalid --tpm-pcr-public-key: %w", err)
+		}
+	}
+	return p, nil
+}
+
+// checkTPMPolicy checks that the key at handle is bound to exactly policy and
+// that the current boot state satisfies it.
+func checkTPMPolicy(open func() (transport.TPMCloser, error), handle tpm2.TPMHandle, policy tpmkey.Policy) error {
+	var signed []tpmkey.SignedPCRPolicy
+	if policy.PCRSigner != nil {
+		var err error
+		if signed, err = tpmkey.ReadSignedPCRPolicies(*tpmPCRSignature); err != nil {
+			return err
+		}
+	}
+	tpm, err := open()
+	if err != nil {
+		return fmt.Errorf("failed to open TPM: %w", err)
+	}
+	defer tpm.Close()
+	return tpmkey.Check(tpm, handle, policy, signed)
+}
+
 // externalAccountConfig describes the STS exchange (and optional service
 // account impersonation) for a JWT signed by the TPM key at handle.
 func externalAccountConfig(
 	open func() (transport.TPMCloser, error),
 	handle tpm2.TPMHandle,
+	policy tpmkey.Policy,
+	signedPCRPolicyPath string,
 	provider, issuer, subject string,
 	lifetime time.Duration,
 	serviceAccount string,
@@ -166,8 +222,10 @@ func externalAccountConfig(
 			Issuer:  issuer,
 			Subject: subject,
 			// ...while the provider's default allowed audience for the JWT is the https form.
-			Audience: "https://iam.googleapis.com/" + provider,
-			Lifetime: lifetime,
+			Audience:            "https://iam.googleapis.com/" + provider,
+			Lifetime:            lifetime,
+			Policy:              policy,
+			SignedPCRPolicyPath: signedPCRPolicyPath,
 		},
 	}
 	if serviceAccount != "" {
