@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.1...v1.1.0) (2026-11-06)
+
+
+### Features
+
+* Adding support for PCR7 and PCR11 binding ([d25ffdb](https://github.com/monetr/k8s-cloudkms-plugin/commit/d25ffdb4a8ee7837f79eae5c11e019aa5683dcb6))
+
+
+### Bug Fixes
+
+* **deps:** update module google.golang.org/api to v0.310.0 ([#13](https://github.com/monetr/k8s-cloudkms-plugin/issues/13)) ([e0b26db](https://github.com/monetr/k8s-cloudkms-plugin/commit/e0b26dbc5c0115733267a72516131593dc2d0d22))
+
 ## [1.0.1](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.0...v1.0.1) (2026-10-31)
 
 
