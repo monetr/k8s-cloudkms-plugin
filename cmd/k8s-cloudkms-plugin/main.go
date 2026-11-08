@@ -148,7 +148,7 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 
 	conf := externalAccountConfig(open, tpm2.TPMHandle(handle), policy, *tpmPCRSignature, *wifProvider, *jwtIssuer, subject, *jwtLifetime, *impersonateSA)
 
-	ts, err := externalaccount.NewTokenSource(ctx, conf)
+	ts, client, err := newTokenSourceClient(ctx, conf, googleAPITimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,42 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 	}
 	glog.Infof("Authenticated to Google Cloud via %s as subject %q using TPM key 0x%x", *wifProvider, subject, handle)
 
-	return oauth2.NewClient(ctx, ts), nil
+	return client, nil
+}
+
+// googleAPITimeout bounds each HTTP request to Google: the STS exchange, the
+// service account impersonation, and each Cloud KMS call.
+const googleAPITimeout = 30 * time.Second
+
+// newTokenSourceClient returns the token source for conf and an HTTP client
+// that authenticates with it, where every request, including token refreshes,
+// is bounded by timeout.
+//
+// The bound on refreshes matters most. The refresh runs under the token
+// source's mutex, and oauth2.Transport doesn't pass the request's context to
+// it. Without its own timeout, the STS exchange uses http.DefaultClient, and a
+// half-open connection to Google during a refresh would block every Cloud KMS
+// call on the node, whatever kube-apiserver's gRPC deadline.
+func newTokenSourceClient(
+	ctx context.Context,
+	conf externalaccount.Config,
+	timeout time.Duration,
+) (oauth2.TokenSource, *http.Client, error) {
+	// externalaccount takes the client for the STS exchange and the
+	// impersonation call from this context value.
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, &http.Client{Timeout: timeout})
+
+	ts, err := externalaccount.NewTokenSource(ctx, conf)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// oauth2.NewClient keeps only the context client's Transport, so set the
+	// timeout again. Upstream's healthz TestIamPermissions call has no context,
+	// so this is its only bound.
+	client := oauth2.NewClient(ctx, ts)
+	client.Timeout = timeout
+	return ts, client, nil
 }
 
 // tpmPolicy builds the key's boot-state policy from the --tpm-key-pcrs and
