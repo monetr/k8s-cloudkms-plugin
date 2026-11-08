@@ -29,7 +29,7 @@ func main() {
 
 	fs := flag.NewFlagSet(cmd, flag.ExitOnError)
 	pathToTPM := fs.String("path-to-tpm", "/dev/tpmrm0", "Path to the TPM resource manager device.")
-	handleFlag := fs.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle for the signing key.")
+	handleFlag := fs.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle for the signing key. Use 0x81008000-0x81008EFF (TCG Storage, Available); see the README.")
 	pcrsFlag := fs.String("pcrs", "", "create/check: comma-separated PCRs (SHA-256 bank) to bind the key to at their current values, e.g. 7.")
 	pcrPublicKey := fs.String("pcr-public-key", "", "create/check: PEM RSA public key or certificate; the key accepts PCR policies signed by it (systemd/ukify signed PCR 11 policies).")
 	pcrSignature := fs.String("pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "create/check: signed PCR policies for the booted UKI. Only used with -pcr-public-key.")

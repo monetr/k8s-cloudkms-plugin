@@ -51,7 +51,7 @@ var (
 
 	// TPM / Workload Identity Federation arguments.
 	pathToTPM     = flag.String("path-to-tpm", "/dev/tpmrm0", "Path to the TPM resource manager device.")
-	tpmKeyHandle  = flag.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle of the TPM signing key created by tpm-wif-key.")
+	tpmKeyHandle  = flag.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle of the TPM signing key created by tpm-wif-key. Keys created with the default handle before 1.1.0 are at 0x81010101.")
 	wifProvider   = flag.String("wif-provider", "", "Workload identity pool provider resource name (ex. projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider)")
 	jwtIssuer     = flag.String("jwt-issuer", "", "`iss` claim of the signed JWT; must match the provider's --issuer-uri.")
 	jwtSubject    = flag.String("jwt-subject", "", "`sub` claim of the signed JWT. Defaults to the hostname.")

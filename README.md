@@ -121,8 +121,9 @@ This produces two binaries:
 sudo bin/tpm-wif-key create > node-1.jwks.json
 ```
 
-This creates the key at persistent handle `0x81010101` (change it with `-tpm-key-handle`). It refuses to overwrite an
-existing key at that handle. To print the JWKS of a key that already exists:
+This creates the key at persistent handle `0x81008101` (change it with `-tpm-key-handle`, see [Choosing a
+handle](#choosing-a-handle)). It refuses to overwrite an existing key at that handle. To print the JWKS of a key that
+already exists:
 
 ```sh
 sudo bin/tpm-wif-key jwks
@@ -133,6 +134,41 @@ thumbprint.
 
 To bind the key to boot state, add `-pcrs` and/or `-pcr-public-key` to `create`. See [Binding the key to boot
 state](#binding-the-key-to-boot-state-pcr-7-and-pcr-11). The binding can't be added to an existing key.
+
+### Choosing a handle
+
+The handle is the key's address in the TPM's persistent storage, and every persistent object on the host shares the same
+address space. Pick one in TCG's **Storage, Available** range, `0x81008000`–`0x81008EFF`. That's the range the [TCG
+handle registry][tcg-handles] (Table 11) sets aside for operating systems and applications in the storage hierarchy,
+where this key lives. The default, `0x81008101`, is in it. For a second key during [rotation](#rotating-a-hosts-key),
+use another handle in the same range, such as `0x81008102`.
+
+[tcg-handles]: https://trustedcomputinggroup.org/wp-content/uploads/RegistryOfReservedTPM2HandlesAndLocalities_v1p1_pub.pdf
+
+| Range | Use | OK for this key? |
+| --- | --- | --- |
+| `0x81000000`–`0x810000FF` | Storage primary keys (the SRK is usually `0x81000001`) | No |
+| `0x81000100`–`0x81007FFF` | Reserved by TCG | No |
+| `0x81008000`–`0x81008EFF` | Storage, available to applications | **Yes** |
+| `0x81008F00`–`0x81008FFF` | Storage, available, but go-tpm-tools picks its own keys' handles here | Avoid |
+| `0x81009000`–`0x8100FFFF` | Storage, available to applications | Yes |
+| `0x81010000`–`0x810100FF` | Endorsement primary keys (EKs, usually `0x81010001` and `0x81010002`) | No |
+| `0x81010100`–`0x81017FFF` | Reserved by TCG | No |
+| `0x81018000`–`0x8101FFFF` | Endorsement, available | No, this key isn't in the endorsement hierarchy |
+| `0x81020000`–`0x810200FF` | TCG Infrastructure Work Group | No |
+| `0x81020100`–`0x8103FFFF` | Reserved by TCG | No |
+| `0x81040000`–`0x817FFFFF` | Not assigned by the registry | Avoid: stay in the storage range above |
+| `0x81800000`–`0x81FFFFFF` | Platform hierarchy (firmware); `create` can't use these | No |
+
+The TPM itself only requires a handle in `0x81000000`–`0x817FFFFF`, so a reserved handle works today. But TCG may assign
+reserved ranges later, and anything that then tries to store a key at that handle collides with this one. Before you
+pick a handle, list the ones in use with `tpm2_getcap handles-persistent` (from tpm2-tools). `create` also refuses to
+use a handle that's taken.
+
+Versions before 1.1.0 defaulted to `0x81010101`, which is in the reserved part of the endorsement range. Keys created
+there still work: pass `-tpm-key-handle 0x81010101` to `tpm-wif-key` and `--tpm-key-handle=0x81010101` to the plugin. A
+key can't be moved to another handle, so to get it out of that range, [rotate](#rotating-a-hosts-key) to a new key at a
+handle in the table above.
 
 ## 2. Configure Google Cloud
 
@@ -253,7 +289,7 @@ hostNetwork pods, can read them. This wrapper adds the following:
 | `--jwt-subject` | hostname | `sub` claim. Mapped to `google.subject`. |
 | `--jwt-lifetime` | `5m` | Lifetime of each TPM-signed JWT, at most `1h`. It is only used for the STS exchange. |
 | `--path-to-tpm` | `/dev/tpmrm0` | TPM resource manager device. |
-| `--tpm-key-handle` | `0x81010101` | Persistent handle of the key created by `tpm-wif-key`. |
+| `--tpm-key-handle` | `0x81008101` | Persistent handle of the key created by `tpm-wif-key`. Keys created with the default before 1.1.0 are at `0x81010101`. See [Choosing a handle](#choosing-a-handle). |
 | `--tpm-key-pcrs` | *(none)* | PCRs the key is bound to at fixed values, as given to `tpm-wif-key create -pcrs` (for example `7`). Must match the key. |
 | `--tpm-pcr-public-key` | *(none)* | PEM RSA public key (or certificate) the key accepts signed PCR policies from, as given to `tpm-wif-key create -pcr-public-key`. Must match the key. |
 | `--tpm-pcr-signature` | `/run/systemd/tpm2-pcr-signature.json` | Signed PCR policies for the booted UKI. Only used with `--tpm-pcr-public-key`. Read on every signature. |
@@ -435,9 +471,10 @@ Do any one of these. Each blocks new token exchanges immediately. Tokens that we
 
 ## Rotating a host's key
 
-Provision a new key at a different handle, append it to the host's JWKS (up to 8 keys), and point `--tpm-key-handle` at
-it. Then remove the old key from the JWKS. To delete the old key from the TPM itself, run `tpm2_evictcontrol -C o -c
-0x81010101` (from tpm2-tools).
+Provision a new key at a different handle in the [available range](#choosing-a-handle) (for example `0x81008102` next to
+the default `0x81008101`), append it to the host's JWKS (up to 8 keys), and point `--tpm-key-handle` at it. Then remove
+the old key from the JWKS. To delete the old key from the TPM itself, run `tpm2_evictcontrol -C o -c <old handle>` (from
+tpm2-tools).
 
 For a key bound to boot state, create the new key with the same `-pcrs` and `-pcr-public-key` options and run
 `tpm-wif-key check` against its handle.

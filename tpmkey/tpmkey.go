@@ -19,7 +19,20 @@ import (
 
 // DefaultHandle is the persistent owner-hierarchy handle the signing key is
 // stored at unless another is specified.
-const DefaultHandle tpm2.TPMHandle = 0x81010101
+//
+// The key is a child of the storage root key, so by TCG convention its handle
+// belongs in the "Storage, Available" range, 0x81008000-0x8100FFFF (Registry
+// of Reserved TPM 2.0 Handles and Localities, Table 11). go-tpm-tools picks
+// its own handles from 0x81008F00-0x81008FFF, so stay below that. Other
+// handles are taken by primary keys, reserved for future TCG use, or belong
+// to the endorsement or platform hierarchies. The TPM doesn't enforce any of
+// this, so a handle anywhere in 0x81000000-0x817FFFFF works today, but one in
+// a reserved range may clash with whatever TCG later assigns there.
+//
+// Versions before 1.1.0 defaulted to 0x81010101, which is in the reserved
+// part of the endorsement range. Keys created there keep working when given
+// --tpm-key-handle=0x81010101 explicitly.
+const DefaultHandle tpm2.TPMHandle = 0x81008101
 
 // signingTemplate describes an ECDSA P-256 / SHA-256 signing key that is bound
 // to this TPM (FixedTPM), cannot be duplicated to another parent
