@@ -437,7 +437,11 @@ sudo tpm-wif-key create \
 
 `create` prints what it bound the key to on stderr. It refuses to bind a PCR
 that still holds its reset value (all zeros or all `0xff`), because a PCR
-nothing measured into matches any boot that also leaves it alone.
+nothing measured into matches any boot that also leaves it alone. With
+`-pcr-public-key`, it also refuses unless `-pcr-signature` (default
+`/run/systemd/tpm2-pcr-signature.json`) has a policy signed by that key that
+matches the current boot, so a wrong key or an unsigned UKI fails before
+anything is persisted.
 
 For PCR 7 only, drop `-pcr-public-key`. For a signed PCR 11 policy only, drop
 `-pcrs 7`. That isn't recommended: see the requirements above.

@@ -32,7 +32,7 @@ func main() {
 	handleFlag := fs.String("tpm-key-handle", fmt.Sprintf("0x%x", uint32(tpmkey.DefaultHandle)), "Persistent handle for the signing key.")
 	pcrsFlag := fs.String("pcrs", "", "create/check: comma-separated PCRs (SHA-256 bank) to bind the key to at their current values, e.g. 7.")
 	pcrPublicKey := fs.String("pcr-public-key", "", "create/check: PEM RSA public key; the key accepts PCR policies signed by it (systemd/ukify signed PCR 11 policies).")
-	pcrSignature := fs.String("pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "check: signed PCR policies for the booted UKI. Only used with -pcr-public-key.")
+	pcrSignature := fs.String("pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "create/check: signed PCR policies for the booted UKI. Only used with -pcr-public-key.")
 	_ = fs.Parse(os.Args[2:])
 
 	handle, err := strconv.ParseUint(*handleFlag, 0, 32)
@@ -53,6 +53,18 @@ func main() {
 	var pub *ecdsa.PublicKey
 	switch cmd {
 	case "create":
+		// Refuse to persist a key this boot couldn't use: a wrong
+		// -pcr-public-key or an unsigned boot would otherwise only show up at
+		// `check` or plugin start, after the JWKS may already be uploaded.
+		if policy.PCRSigner != nil {
+			signed, err := tpmkey.ReadSignedPCRPolicies(*pcrSignature)
+			if err != nil {
+				fatalf("%v", err)
+			}
+			if err := tpmkey.CheckSignedPCRPolicies(tpm, policy.PCRSigner, signed); err != nil {
+				fatalf("refusing to create a key the current boot can't use: %v", err)
+			}
+		}
 		var values [][]byte
 		pub, values, err = tpmkey.CreateWithPolicy(tpm, tpm2.TPMHandle(handle), policy)
 		if err == nil {
