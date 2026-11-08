@@ -63,7 +63,7 @@ var signingTemplate = tpm2.TPMTPublic{
 // Create generates a new signing key that is not bound to any boot state. See
 // CreateWithPolicy.
 func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) {
-	pub, _, err := CreateWithPolicy(tpm, handle, Policy{})
+	pub, _, err := CreateWithPolicy(tpm, handle, Policy{}, nil)
 	return pub, err
 }
 
@@ -72,8 +72,10 @@ func Create(tpm transport.TPM, handle tpm2.TPMHandle) (*ecdsa.PublicKey, error) 
 // a key that already exists at handle.
 //
 // If p is bound, the key can only be used through a policy session that
-// satisfies p (see Policy). It returns the values p.PCRs were bound to.
-func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy) (*ecdsa.PublicKey, [][]byte, error) {
+// satisfies p (see Policy), and it's only persisted once it has signed through
+// such a session. signed holds the signed PCR policies to choose from when
+// p.PCRSigner is set. It returns the values p.PCRs were bound to.
+func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy, signed []SignedPCRPolicy) (*ecdsa.PublicKey, [][]byte, error) {
 	if _, err := (tpm2.ReadPublic{ObjectHandle: handle}).Execute(tpm); err == nil {
 		return nil, nil, fmt.Errorf("a key already exists at handle 0x%x", uint32(handle))
 	}
@@ -100,33 +102,21 @@ func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy) (*ecds
 		template.ObjectAttributes.UserWithAuth = false
 	}
 
-	srk, err := tpm2.CreatePrimary{
-		PrimaryHandle: tpm2.TPMRHOwner,
-		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
-	}.Execute(tpm)
+	loaded, err := loadNewKey(tpm, template)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create storage root key: %w", err)
-	}
-	defer tpm2.FlushContext{FlushHandle: srk.ObjectHandle}.Execute(tpm)
-	parent := tpm2.NamedHandle{Handle: srk.ObjectHandle, Name: srk.Name}
-
-	created, err := tpm2.Create{
-		ParentHandle: parent,
-		InPublic:     tpm2.New2B(template),
-	}.Execute(tpm)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create signing key: %w", err)
-	}
-
-	loaded, err := tpm2.Load{
-		ParentHandle: parent,
-		InPrivate:    created.OutPrivate,
-		InPublic:     created.OutPublic,
-	}.Execute(tpm)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load signing key: %w", err)
+		return nil, nil, err
 	}
 	defer tpm2.FlushContext{FlushHandle: loaded.ObjectHandle}.Execute(tpm)
+
+	// Sign through the same policy session the plugin will use, so that the
+	// TPM itself checks everything, including the signature on the PCR policy.
+	// Otherwise a bad one only shows up at the plugin's first signature, after
+	// the JWKS has been uploaded.
+	if p.Bound() {
+		if err := probeSign(tpm, loaded.ObjectHandle, loaded.Name, p, signed); err != nil {
+			return nil, nil, fmt.Errorf("refusing to create a key the current boot can't use: %w", err)
+		}
+	}
 
 	if _, err := (tpm2.EvictControl{
 		Auth:             tpm2.TPMRHOwner,
@@ -138,6 +128,40 @@ func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy) (*ecds
 
 	pub, _, err := Public(tpm, handle)
 	return pub, values, err
+}
+
+// loadNewKey creates a key from template under a freshly derived storage root
+// key and loads it. The storage root key is flushed on return: satisfying a
+// signed policy loads the PCR-signing key as well, and a TPM may only have
+// room for three transient objects.
+func loadNewKey(tpm transport.TPM, template tpm2.TPMTPublic) (*tpm2.LoadResponse, error) {
+	srk, err := tpm2.CreatePrimary{
+		PrimaryHandle: tpm2.TPMRHOwner,
+		InPublic:      tpm2.New2B(tpm2.ECCSRKTemplate),
+	}.Execute(tpm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create storage root key: %w", err)
+	}
+	defer tpm2.FlushContext{FlushHandle: srk.ObjectHandle}.Execute(tpm)
+	parent := tpm2.NamedHandle{Handle: srk.ObjectHandle, Name: srk.Name}
+
+	created, err := tpm2.Create{
+		ParentHandle: parent,
+		InPublic:     tpm2.New2B(template),
+	}.Execute(tpm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create signing key: %w", err)
+	}
+
+	loaded, err := tpm2.Load{
+		ParentHandle: parent,
+		InPrivate:    created.OutPrivate,
+		InPublic:     created.OutPublic,
+	}.Execute(tpm)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load signing key: %w", err)
+	}
+	return loaded, nil
 }
 
 // KeyInfo describes the key at a persistent handle.
@@ -223,6 +247,14 @@ func sign(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest 
 		}
 		return sig, err
 	}
+}
+
+// probeSign signs a throwaway digest with the key, to find out whether the
+// TPM lets the current boot use it.
+func probeSign(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, p Policy, signed []SignedPCRPolicy) error {
+	digest := sha256.Sum256([]byte("tpmkey usability probe"))
+	_, err := sign(tpm, handle, name, digest[:], p, signed)
+	return err
 }
 
 func signWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, name tpm2.TPM2BName, digest []byte, p Policy, approved *SignedPCRPolicy) ([]byte, error) {

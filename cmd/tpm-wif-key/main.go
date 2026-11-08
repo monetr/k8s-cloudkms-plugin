@@ -53,20 +53,14 @@ func main() {
 	var pub *ecdsa.PublicKey
 	switch cmd {
 	case "create":
-		// Refuse to persist a key this boot couldn't use: a wrong
-		// -pcr-public-key or an unsigned boot would otherwise only show up at
-		// `check` or plugin start, after the JWKS may already be uploaded.
+		var signed []tpmkey.SignedPCRPolicy
 		if policy.PCRSigner != nil {
-			signed, err := tpmkey.ReadSignedPCRPolicies(*pcrSignature)
-			if err != nil {
+			if signed, err = tpmkey.ReadSignedPCRPolicies(*pcrSignature); err != nil {
 				fatalf("%v", err)
-			}
-			if err := tpmkey.CheckSignedPCRPolicies(tpm, policy.PCRSigner, signed); err != nil {
-				fatalf("refusing to create a key the current boot can't use: %v", err)
 			}
 		}
 		var values [][]byte
-		pub, values, err = tpmkey.CreateWithPolicy(tpm, tpm2.TPMHandle(handle), policy)
+		pub, values, err = tpmkey.CreateWithPolicy(tpm, tpm2.TPMHandle(handle), policy, signed)
 		if err == nil {
 			describePolicy(policy, values)
 		}

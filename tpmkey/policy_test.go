@@ -109,6 +109,46 @@ func writeSignedPolicies(t *testing.T, tpm transport.TPM, key *rsa.PrivateKey, p
 	return path
 }
 
+// signedPolicies is writeSignedPolicies, already parsed.
+func signedPolicies(t *testing.T, tpm transport.TPM, key *rsa.PrivateKey, pcrs []uint) []SignedPCRPolicy {
+	t.Helper()
+	return readPolicies(t, writeSignedPolicies(t, tpm, key, pcrs))
+}
+
+func readPolicies(t *testing.T, path string) []SignedPCRPolicy {
+	t.Helper()
+	policies, err := ReadSignedPCRPolicies(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policies
+}
+
+// corruptSignature flips a bit in the middle of the first policy's signature.
+func corruptSignature(policies []SignedPCRPolicy) {
+	sig := policies[0].Signature
+	sig[len(sig)/2] ^= 0xff
+}
+
+// loadedObjects returns the handles of the objects loaded in the TPM's
+// transient slots.
+func loadedObjects(t *testing.T, tpm transport.TPM) []tpm2.TPMHandle {
+	t.Helper()
+	rsp, err := tpm2.GetCapability{
+		Capability:    tpm2.TPMCapHandles,
+		Property:      uint32(tpm2.TPMHTTransient) << 24,
+		PropertyCount: 16,
+	}.Execute(tpm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handles, err := rsp.CapabilityData.Data.Handles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return handles.Handle
+}
+
 func newRSAKey(t *testing.T) *rsa.PrivateKey {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -225,30 +265,101 @@ func TestParseRSAPublicKeyPEMCertificate(t *testing.T) {
 	}
 }
 
-// CheckSignedPCRPolicies is what lets `tpm-wif-key create` refuse a key the
-// current boot couldn't use, before anything is persisted.
-func TestCheckSignedPCRPolicies(t *testing.T) {
+// A key the current boot can't use must not be persisted: its JWKS would be
+// uploaded, and the plugin would then fail on its first signature.
+func TestCreateRefusesKeyTheBootCantUse(t *testing.T) {
+	signer, other := newRSAKey(t), newRSAKey(t)
+	p := Policy{PCRSigner: &signer.PublicKey}
+	for name, tc := range map[string]struct {
+		signed func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy
+		want   string
+	}{
+		"corrupt signature": {
+			func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy {
+				policies := signedPolicies(t, tpm, signer, []uint{11})
+				corruptSignature(policies)
+				return policies
+			},
+			"rejected the signature",
+		},
+		// A PKCS #11 setup whose certificate doesn't belong to its key: the
+		// fingerprint comes from the certificate, the signature from the key.
+		"signature from a key other than the fingerprint's": {
+			func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy {
+				policies := signedPolicies(t, tpm, other, []uint{11})
+				policies[0].PKFP = PublicKeyFingerprint(&signer.PublicKey)
+				return policies
+			},
+			"rejected the signature",
+		},
+		"signed by another key": {
+			func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy {
+				return signedPolicies(t, tpm, other, []uint{11})
+			},
+			"no sha256 PCR policy is signed by the configured",
+		},
+		"no signed policies": {
+			func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy { return nil },
+			"no sha256 PCR policy is signed by the configured",
+		},
+		"boot phase not signed for": {
+			func(t *testing.T, tpm transport.TPM) []SignedPCRPolicy {
+				policies := signedPolicies(t, tpm, signer, []uint{11})
+				extendPCR(t, tpm, 11, []byte("shutdown"))
+				return policies
+			},
+			"matches the current PCR values",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpm := openSimulator(t)
+			extendPCR(t, tpm, 11, []byte("kernel"))
+
+			_, _, err := CreateWithPolicy(tpm, DefaultHandle, p, tc.signed(t, tpm))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+			if _, err := (tpm2.ReadPublic{ObjectHandle: DefaultHandle}).Execute(tpm); err == nil {
+				t.Fatal("a key was persisted anyway")
+			}
+
+			if loaded := loadedObjects(t, tpm); len(loaded) != 0 {
+				t.Fatalf("objects left loaded: %v", loaded)
+			}
+
+			// Fixing the problem and trying again must work.
+			if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, signedPolicies(t, tpm, signer, []uint{11})); err != nil {
+				t.Fatalf("retrying with a good policy: %v", err)
+			}
+		})
+	}
+}
+
+// check must report what the plugin would fail on, which includes a signature
+// the TPM won't accept for a policy that otherwise matches.
+func TestCheckRejectsBadSignature(t *testing.T) {
 	tpm := openSimulator(t)
-	extendPCR(t, tpm, 7, []byte("secure boot state"))
-	bootUKI(t, tpm, "enter-initrd", "leave-initrd", "sysinit", "ready")
-	policies, err := ReadSignedPCRPolicies(filepath.Join(fixtureDir, "tpm2-pcr-signature.json"))
-	if err != nil {
+	signer, other := newRSAKey(t), newRSAKey(t)
+	extendPCR(t, tpm, 11, []byte("kernel"))
+	p := Policy{PCRSigner: &signer.PublicKey}
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, signedPolicies(t, tpm, signer, []uint{11})); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := CheckSignedPCRPolicies(tpm, fixtureSigner(t), policies); err != nil {
-		t.Fatalf("matching boot: %v", err)
+	if err := Check(tpm, DefaultHandle, p, signedPolicies(t, tpm, signer, []uint{11})); err != nil {
+		t.Fatalf("good signature: %v", err)
 	}
 
-	wrong := newRSAKey(t)
-	if err := CheckSignedPCRPolicies(tpm, &wrong.PublicKey, policies); err == nil || !strings.Contains(err.Error(), "no sha256 PCR policy is signed by the configured PCR-signing key") {
-		t.Fatalf("expected a wrong signer to be rejected, got %v", err)
+	corrupt := signedPolicies(t, tpm, signer, []uint{11})
+	corruptSignature(corrupt)
+	if err := Check(tpm, DefaultHandle, p, corrupt); err == nil || !strings.Contains(err.Error(), "rejected the signature") {
+		t.Fatalf("corrupt signature: got %v", err)
 	}
 
-	// Past "ready", as after shutdown starts, no signed phase matches.
-	extendPCR(t, tpm, 11, []byte("shutdown"))
-	if err := CheckSignedPCRPolicies(tpm, fixtureSigner(t), policies); err == nil || !strings.Contains(err.Error(), "matches the current PCR values") {
-		t.Fatalf("expected an unsigned boot phase to be rejected, got %v", err)
+	mismatched := signedPolicies(t, tpm, other, []uint{11})
+	mismatched[0].PKFP = PublicKeyFingerprint(&signer.PublicKey)
+	if err := Check(tpm, DefaultHandle, p, mismatched); err == nil || !strings.Contains(err.Error(), "rejected the signature") {
+		t.Fatalf("signature from another key: got %v", err)
 	}
 }
 
@@ -272,7 +383,7 @@ func TestCreateWithPCRs(t *testing.T) {
 	extendPCR(t, tpm, 7, []byte("secure boot state"))
 	extendPCR(t, tpm, 11, []byte("uki"))
 
-	_, values, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7, 11}})
+	_, values, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7, 11}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +463,7 @@ func TestReadPCRsMoreThanEight(t *testing.T) {
 
 func TestCreateRefusesResetPCR(t *testing.T) {
 	tpm := openSimulator(t)
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7}}); err == nil || !strings.Contains(err.Error(), "reset value") {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7}}, nil); err == nil || !strings.Contains(err.Error(), "reset value") {
 		t.Fatalf("expected a reset-value error, got %v", err)
 	}
 	if _, _, err := Public(tpm, DefaultHandle); err == nil {
@@ -368,7 +479,7 @@ func TestSubjectTokenWithPCRPolicy(t *testing.T) {
 	tpm := openSimulator(t)
 	extendPCR(t, tpm, 7, []byte("secure boot state"))
 	p := Policy{PCRs: []uint{7}}
-	pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p)
+	pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,7 +503,7 @@ func TestSubjectTokenWithPCRPolicy(t *testing.T) {
 func TestBoundKeyRejectsPassword(t *testing.T) {
 	tpm := openSimulator(t)
 	extendPCR(t, tpm, 7, []byte("secure boot state"))
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7}}); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: []uint{7}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	_, name, err := Public(tpm, DefaultHandle)
@@ -413,7 +524,7 @@ func TestCheckConfigMismatch(t *testing.T) {
 	if _, err := Create(tpm, unbound); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := CreateWithPolicy(tpm, bound, Policy{PCRs: []uint{7}}); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, bound, Policy{PCRs: []uint{7}}, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -473,12 +584,9 @@ func TestSystemdSignedPolicy(t *testing.T) {
 			bootUKI(t, tpm, phases...)
 
 			p := Policy{PCRs: []uint{7}, PCRSigner: fixtureSigner(t)}
-			pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p)
-			if err != nil {
-				t.Fatal(err)
-			}
 			path := filepath.Join(fixtureDir, "tpm2-pcr-signature.json")
-			policies, err := ReadSignedPCRPolicies(path)
+			policies := readPolicies(t, path)
+			pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p, policies)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -502,7 +610,7 @@ func TestSystemdSignedPolicyRequiresPCR7(t *testing.T) {
 	extendPCR(t, tpm, 7, []byte("secure boot state"))
 	bootUKI(t, tpm, "enter-initrd", "leave-initrd", "sysinit", "ready")
 	p := Policy{PCRs: []uint{7}, PCRSigner: fixtureSigner(t)}
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, readPolicies(t, filepath.Join(fixtureDir, "tpm2-pcr-signature.json"))); err != nil {
 		t.Fatal(err)
 	}
 
@@ -521,11 +629,11 @@ func TestSignedPolicyNewKernel(t *testing.T) {
 	signer := newRSAKey(t)
 	p := Policy{PCRSigner: &signer.PublicKey}
 	extendPCR(t, tpm, 11, []byte("kernel 6.12.1"))
-	pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p)
+	oldPolicy := writeSignedPolicies(t, tpm, signer, []uint{11})
+	pub, _, err := CreateWithPolicy(tpm, DefaultHandle, p, readPolicies(t, oldPolicy))
 	if err != nil {
 		t.Fatal(err)
 	}
-	oldPolicy := writeSignedPolicies(t, tpm, signer, []uint{11})
 	mustSign(t, newSupplier(tpm, p, oldPolicy), pub)
 
 	// The simulator can't reboot without losing the key, so stand in for
@@ -543,7 +651,7 @@ func TestSignedPolicyUntrustedSigner(t *testing.T) {
 	trusted, attacker := newRSAKey(t), newRSAKey(t)
 	extendPCR(t, tpm, 11, []byte("kernel"))
 	p := Policy{PCRSigner: &trusted.PublicKey}
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, signedPolicies(t, tpm, trusted, []uint{11})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -569,7 +677,7 @@ func TestSignedPolicyForgedSignature(t *testing.T) {
 	signer := newRSAKey(t)
 	extendPCR(t, tpm, 11, []byte("kernel"))
 	p := Policy{PCRSigner: &signer.PublicKey}
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, signedPolicies(t, tpm, signer, []uint{11})); err != nil {
 		t.Fatal(err)
 	}
 
@@ -594,7 +702,7 @@ func TestSignedPolicyMissingFile(t *testing.T) {
 	signer := newRSAKey(t)
 	extendPCR(t, tpm, 11, []byte("kernel"))
 	p := Policy{PCRSigner: &signer.PublicKey}
-	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p); err != nil {
+	if _, _, err := CreateWithPolicy(tpm, DefaultHandle, p, signedPolicies(t, tpm, signer, []uint{11})); err != nil {
 		t.Fatal(err)
 	}
 	if err := signErr(newSupplier(tpm, p, filepath.Join(t.TempDir(), "missing.json"))); err == nil {

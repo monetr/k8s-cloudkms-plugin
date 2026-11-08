@@ -323,16 +323,6 @@ func ReadSignedPCRPolicies(path string) ([]SignedPCRPolicy, error) {
 	return ParseSignedPCRPolicies(data)
 }
 
-// CheckSignedPCRPolicies returns an error unless one of policies is signed by
-// signer and matches the PCRs' current values, that is, unless a key bound to
-// signer would be usable in the current boot. Run it before creating such a
-// key, so that a wrong PCR-signing key or a boot that wasn't signed for shows
-// up before the key is persisted and its JWKS uploaded.
-func CheckSignedPCRPolicies(tpm transport.TPM, signer *rsa.PublicKey, policies []SignedPCRPolicy) error {
-	_, err := matchSignedPolicy(tpm, signer, policies)
-	return err
-}
-
 // matchSignedPolicy returns the entry signed by signer whose policy matches
 // the PCRs' current values. That is the policy approved for the booted UKI, in
 // the boot phase the system is in now.
@@ -454,10 +444,9 @@ func Check(tpm transport.TPM, handle tpm2.TPMHandle, p Policy, signed []SignedPC
 		return fmt.Errorf("the key at handle 0x%x does not match the configured policy: %s", uint32(handle), mismatchReason(p))
 	}
 
+	// Only the TPM's own check covers the signature on the PCR policy.
 	if p.PCRSigner != nil {
-		if _, err := matchSignedPolicy(tpm, p.PCRSigner, signed); err != nil {
-			return err
-		}
+		return probeSign(tpm, handle, info.Name, p, signed)
 	}
 	return nil
 }
