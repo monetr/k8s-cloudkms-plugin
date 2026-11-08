@@ -242,7 +242,9 @@ Either prints `ok` when healthy, or an error with a non-200 status.
 
 ### Flags
 
-All upstream flags are supported except `--gce-config` and `--healthz-port`. This wrapper adds the following:
+All upstream flags are supported except `--gce-config` and `--healthz-port`. `--metrics-port` (default `8082`) also
+takes `0`, which turns metrics off. They're unauthenticated, on TCP `localhost`, so any local process, including
+hostNetwork pods, can read them. This wrapper adds the following:
 
 | Flag | Default | Description |
 | --- | --- | --- |

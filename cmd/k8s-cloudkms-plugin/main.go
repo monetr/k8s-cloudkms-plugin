@@ -41,7 +41,7 @@ var (
 	healthzPath    = flag.String("healthz-path", "healthz", "Path at which to publish healthz")
 	healthzTimeout = flag.Duration("healthz-timeout", 5*time.Second, "timeout in seconds for communicating with the unix socket")
 
-	metricsPort = flag.Int("metrics-port", 8082, "Port on which to publish metrics")
+	metricsPort = flag.Int("metrics-port", 8082, "Port on localhost on which to publish metrics. 0 disables metrics.")
 	metricsPath = flag.String("metrics-path", "metrics", "Path at which to publish metrics")
 
 	keyURI           = flag.String("key-uri", "", "Uri of the key use for crypto operations (ex. projects/my-project/locations/my-location/keyRings/my-key-ring/cryptoKeys/my-key)")
@@ -85,11 +85,18 @@ func main() {
 		glog.Exitf("failed to instantiate cloud kms httpClient: %v", err)
 	}
 
-	metrics := &plugin.Metrics{
-		ServingURL: &url.URL{
-			Host: fmt.Sprintf("localhost:%d", *metricsPort),
-			Path: *metricsPath,
-		},
+	// Metrics are unauthenticated and on TCP, so any local process, including
+	// hostNetwork pods, can read them. --metrics-port=0 turns them off.
+	var metrics *plugin.Metrics
+	if *metricsPort != 0 {
+		metrics = &plugin.Metrics{
+			ServingURL: &url.URL{
+				Host: fmt.Sprintf("localhost:%d", *metricsPort),
+				Path: *metricsPath,
+			},
+		}
+	} else {
+		glog.Info("Metrics are disabled (--metrics-port=0)")
 	}
 
 	var p plugin.Plugin
@@ -299,7 +306,12 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 	signalsChan := make(chan os.Signal, 1)
 	signal.Notify(signalsChan, syscall.SIGINT, syscall.SIGTERM)
 
-	metricsErrCh := m.Serve()
+	// A nil channel never receives, so with metrics disabled that case below
+	// never fires.
+	var metricsErrCh chan error
+	if m != nil {
+		metricsErrCh = m.Serve()
+	}
 	healthzErrCh := serveHealthz(h, *healthzSocket, *healthzPath)
 
 	gRPCSrv, kmsErrorCh := pluginManager.Start()
