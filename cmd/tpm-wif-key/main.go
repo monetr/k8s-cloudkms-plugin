@@ -34,6 +34,12 @@ func main() {
 	pcrPublicKey := fs.String("pcr-public-key", "", "create/check: PEM RSA public key or certificate; the key accepts PCR policies signed by it (systemd/ukify signed PCR 11 policies).")
 	pcrSignature := fs.String("pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "create/check: signed PCR policies for the booted UKI. Only used with -pcr-public-key.")
 	_ = fs.Parse(os.Args[2:])
+	// Parsing stops at the first non-flag argument, so any flags after a stray
+	// one, such as -pcrs, would be silently ignored.
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "unexpected argument %q: %s only takes flags\n", fs.Arg(0), cmd)
+		os.Exit(2)
+	}
 
 	handle, err := strconv.ParseUint(*handleFlag, 0, 32)
 	if err != nil {
