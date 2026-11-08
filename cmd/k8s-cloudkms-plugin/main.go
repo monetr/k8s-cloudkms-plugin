@@ -303,6 +303,12 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 	healthzErrCh := serveHealthz(h, *healthzSocket, *healthzPath)
 
 	gRPCSrv, kmsErrorCh := pluginManager.Start()
+	if gRPCSrv == nil {
+		// Start failed (for example, the socket path isn't writable) and has
+		// already sent the reason on the buffered channel. Return it rather
+		// than deferring GracefulStop on a nil server, which would panic.
+		return <-kmsErrorCh
+	}
 	defer gRPCSrv.GracefulStop()
 
 	for {
