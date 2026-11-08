@@ -113,7 +113,9 @@ func main() {
 
 	pluginManager := plugin.NewManager(p, *pathToUnixSocket)
 
-	glog.Exit(run(pluginManager, hc, metrics))
+	if err := run(pluginManager, hc, metrics); err != nil {
+		glog.Exit(err)
+	}
 }
 
 // newTPMHTTPClient returns an HTTP client whose access tokens come from an STS
@@ -306,7 +308,10 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 	for {
 		select {
 		case sig := <-signalsChan:
-			return fmt.Errorf("captured %v, shutting down kms-plugin", sig)
+			// A requested stop, not a failure: exit 0 so that systemd doesn't
+			// mark the unit failed on every stop or restart.
+			glog.Infof("captured %v, shutting down kms-plugin", sig)
+			return nil
 		case kmsError := <-kmsErrorCh:
 			return kmsError
 		case metricsErr := <-metricsErrCh:
