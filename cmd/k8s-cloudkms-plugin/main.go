@@ -60,7 +60,7 @@ var (
 
 	// Boot-state (PCR) binding. These must match how the key was created.
 	tpmKeyPCRs      = flag.String("tpm-key-pcrs", "", "Comma-separated PCRs the key was bound to with `tpm-wif-key create -pcrs` (ex. 7). Must match the key.")
-	tpmPCRPublicKey = flag.String("tpm-pcr-public-key", "", "PEM RSA public key the key was bound to with `tpm-wif-key create -pcr-public-key`. Enables signed PCR policies.")
+	tpmPCRPublicKey = flag.String("tpm-pcr-public-key", "", "PEM RSA public key or certificate the key was bound to with `tpm-wif-key create -pcr-public-key`. Enables signed PCR policies.")
 	tpmPCRSignature = flag.String("tpm-pcr-signature", "/run/systemd/tpm2-pcr-signature.json", "Signed PCR policies for the booted UKI. Only used with --tpm-pcr-public-key.")
 )
 

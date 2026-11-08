@@ -68,30 +68,39 @@ func ParsePCRList(s string) ([]uint, error) {
 	return slices.Compact(pcrs), nil
 }
 
-// ParseRSAPublicKeyPEM parses a PEM-encoded RSA public key in either PKIX
-// ("PUBLIC KEY", what ukify and systemd write) or PKCS #1 ("RSA PUBLIC KEY")
-// form.
+// ParseRSAPublicKeyPEM parses a PEM-encoded RSA public key in PKIX ("PUBLIC
+// KEY", what ukify and systemd write) or PKCS #1 ("RSA PUBLIC KEY") form, or
+// takes it from an X.509 certificate ("CERTIFICATE", as kept for PKCS #11
+// signing setups). Only the certificate's key is used; its validity, issuer
+// and extensions are not checked.
 func ParseRSAPublicKeyPEM(data []byte) (*rsa.PublicKey, error) {
 	block, _ := pem.Decode(data)
 	if block == nil {
 		return nil, errors.New("no PEM block found")
 	}
+	var key any
 	switch block.Type {
 	case "PUBLIC KEY":
-		key, err := x509.ParsePKIXPublicKey(block.Bytes)
+		var err error
+		if key, err = x509.ParsePKIXPublicKey(block.Bytes); err != nil {
+			return nil, err
+		}
+	case "RSA PUBLIC KEY":
+		return x509.ParsePKCS1PublicKey(block.Bytes)
+	case "CERTIFICATE":
+		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return nil, err
 		}
-		rsaKey, ok := key.(*rsa.PublicKey)
-		if !ok {
-			return nil, errors.New("PCR-signing public key is not an RSA key (systemd only signs PCR policies with RSA)")
-		}
-		return rsaKey, nil
-	case "RSA PUBLIC KEY":
-		return x509.ParsePKCS1PublicKey(block.Bytes)
+		key = cert.PublicKey
 	default:
-		return nil, fmt.Errorf("unexpected PEM block %q, want a public key", block.Type)
+		return nil, fmt.Errorf("unexpected PEM block %q, want a public key or certificate", block.Type)
 	}
+	rsaKey, ok := key.(*rsa.PublicKey)
+	if !ok {
+		return nil, errors.New("PCR-signing public key is not an RSA key (systemd only signs PCR policies with RSA)")
+	}
+	return rsaKey, nil
 }
 
 // pcrSelection selects pcrs in the SHA-256 bank, encoded the way PC Client

@@ -299,7 +299,7 @@ This wrapper adds the following:
 | `--path-to-tpm` | `/dev/tpmrm0` | TPM resource manager device. |
 | `--tpm-key-handle` | `0x81010101` | Persistent handle of the key created by `tpm-wif-key`. |
 | `--tpm-key-pcrs` | *(none)* | PCRs the key is bound to at fixed values, as given to `tpm-wif-key create -pcrs` (for example `7`). Must match the key. |
-| `--tpm-pcr-public-key` | *(none)* | PEM RSA public key the key accepts signed PCR policies from, as given to `tpm-wif-key create -pcr-public-key`. Must match the key. |
+| `--tpm-pcr-public-key` | *(none)* | PEM RSA public key (or certificate) the key accepts signed PCR policies from, as given to `tpm-wif-key create -pcr-public-key`. Must match the key. |
 | `--tpm-pcr-signature` | `/run/systemd/tpm2-pcr-signature.json` | Signed PCR policies for the booted UKI. Only used with `--tpm-pcr-public-key`. Read on every signature. |
 | `--healthz-socket` | `/var/run/kmsplugin/healthz.sock` | Unix socket for healthz, replacing upstream's TCP port. Each request makes Cloud KMS calls as this node, so it isn't exposed on the network or to other local users. See [Checking health](#checking-health). |
 | `--impersonate-service-account` | *(none)* | Optional service account email to impersonate. If empty, the pool identity is used directly, as in the IAM examples above. |
