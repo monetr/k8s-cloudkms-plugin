@@ -195,7 +195,7 @@ func fakeKMS(t *testing.T, respond func(w http.ResponseWriter)) *cloudkms.Projec
 	// once the request body has been read, so r.Context() wouldn't end here.
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, ":testIamPermissions") {
+		if r.URL.Path != "/v1/"+testKeyURI+":testIamPermissions" {
 			t.Errorf("unexpected Cloud KMS call %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 			return
