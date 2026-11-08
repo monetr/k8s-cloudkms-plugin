@@ -172,6 +172,19 @@ func readPCRsOnce(tpm transport.TPM, pcrs []uint) ([][]byte, bool, error) {
 	return values, true, nil
 }
 
+// checkNotResettable refuses to bind PCRs 16 and 23, which TPM2_PCR_Reset can
+// reset from locality 0, that is, from ordinary software. Anything that can
+// reach the TPM could reset one and replay the expected value without a
+// reboot, so binding it says nothing about how the host booted.
+func checkNotResettable(pcrs []uint) error {
+	for _, pcr := range pcrs {
+		if pcr == 16 || pcr == 23 {
+			return fmt.Errorf("PCR %d can be reset by software without a reboot, so binding it would not protect anything", pcr)
+		}
+	}
+	return nil
+}
+
 // checkNotReset refuses to bind a PCR that still holds its reset value. PCRs
 // 0-15 reset to all zeros and 17-22 to all 0xFF. A PCR nothing has extended
 // (for example PCR 11 when the host didn't boot a UKI through systemd-stub)

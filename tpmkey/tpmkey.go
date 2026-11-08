@@ -84,6 +84,9 @@ func CreateWithPolicy(tpm transport.TPM, handle tpm2.TPMHandle, p Policy, signed
 	var values [][]byte
 	if p.Bound() {
 		if len(p.PCRs) > 0 {
+			if err := checkNotResettable(p.PCRs); err != nil {
+				return nil, nil, err
+			}
 			var err error
 			if values, err = ReadPCRs(tpm, p.PCRs); err != nil {
 				return nil, nil, err

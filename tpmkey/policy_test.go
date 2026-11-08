@@ -475,6 +475,45 @@ func TestCreateRefusesResetPCR(t *testing.T) {
 	}
 }
 
+// The PCRs are extended first, so that it's this check that refuses them and
+// not the reset-value one.
+func TestCreateRefusesResettablePCR(t *testing.T) {
+	for name, pcrs := range map[string][]uint{
+		"16":       {16},
+		"23":       {23},
+		"7 and 16": {7, 16},
+		"7 and 23": {7, 23},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tpm := openSimulator(t)
+			for _, pcr := range pcrs {
+				extendPCR(t, tpm, pcr, []byte("measured"))
+			}
+			_, _, err := CreateWithPolicy(tpm, DefaultHandle, Policy{PCRs: pcrs}, nil)
+			if err == nil || !strings.Contains(err.Error(), "can be reset by software") {
+				t.Fatalf("expected a resettable PCR error, got %v", err)
+			}
+			if _, _, err := Public(tpm, DefaultHandle); err == nil {
+				t.Fatal("a key was persisted despite the error")
+			}
+		})
+	}
+}
+
+// The PCRs refused must be exactly the ones the TPM lets software reset.
+func TestCheckNotResettableMatchesTPM(t *testing.T) {
+	tpm := openSimulator(t)
+	for pcr := range uint(24) {
+		_, resetErr := tpm2.PCRReset{
+			PCRHandle: tpm2.AuthHandle{Handle: tpm2.TPMHandle(pcr), Auth: tpm2.PasswordAuth(nil)},
+		}.Execute(tpm)
+		resettable, refused := resetErr == nil, checkNotResettable([]uint{pcr}) != nil
+		if resettable != refused {
+			t.Errorf("PCR %d: resettable from software is %v, but refused is %v", pcr, resettable, refused)
+		}
+	}
+}
+
 func TestSubjectTokenWithPCRPolicy(t *testing.T) {
 	tpm := openSimulator(t)
 	extendPCR(t, tpm, 7, []byte("secure boot state"))
