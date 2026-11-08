@@ -43,7 +43,9 @@ Restart=always
 RestartSec=5s
 
 # Runs as an unprivileged, throwaway user. TPM access comes only from the tss
-# group, which owns /dev/tpmrm0 on most distros.
+# group, which owns /dev/tpmrm0 on most distros. On Debian (tpm-udev) the
+# device is tss:tss 0660, so the tss user can use the key too: don't run
+# other TPM daemons as tss, or add other users to the group, on these hosts.
 DynamicUser=yes
 SupplementaryGroups=tss
 

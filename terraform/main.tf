@@ -1,10 +1,10 @@
-# APIs the plugin talks to: STS for the JWT exchange, IAM Credentials for
-# service account impersonation, and Cloud KMS itself.
+# APIs the plugin talks to: STS for the JWT exchange, and Cloud KMS itself.
+# (With --impersonate-service-account, also enable
+# iamcredentials.googleapis.com; see the README.)
 resource "google_project_service" "services" {
   for_each = toset([
     "cloudkms.googleapis.com",
     "iam.googleapis.com",
-    "iamcredentials.googleapis.com",
     "sts.googleapis.com",
   ])
 
@@ -48,27 +48,6 @@ resource "google_iam_workload_identity_pool_provider" "host" {
   }
 }
 
-# --- The service account the hosts impersonate --------------------------------
-
-resource "google_service_account" "plugin" {
-  account_id   = var.service_account_id
-  display_name = "k8s-cloudkms-plugin"
-  description  = "Encrypts/decrypts Kubernetes secrets. Impersonated by TPM-authenticated hosts."
-}
-
-# Each host's federated identity may mint access tokens for the service account.
-# Granted per host (not to the whole pool) so the binding list says exactly who.
-resource "google_service_account_iam_member" "host_impersonation" {
-  for_each = var.hosts
-
-  service_account_id = google_service_account.plugin.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.plugin.name}/subject/${each.key}"
-
-  # The subject only exists once its provider does.
-  depends_on = [google_iam_workload_identity_pool_provider.host]
-}
-
 # --- KMS ---------------------------------------------------------------------
 
 resource "google_kms_key_ring" "plugin" {
@@ -89,11 +68,23 @@ resource "google_kms_crypto_key" "secrets" {
   }
 }
 
-# The plugin only uses cloudkms.cryptoKeyVersions.useToEncrypt and
-# useToDecrypt (including its healthz TestIamPermissions check), which is
-# exactly this role. Scoped to the key ring, so nothing outside it.
-resource "google_kms_key_ring_iam_member" "plugin" {
-  key_ring_id = google_kms_key_ring.plugin.id
-  role        = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
-  member      = google_service_account.plugin.member
+# Each host's federated identity uses the key directly, with no service account
+# in between. The plugin only uses cloudkms.cryptoKeyVersions.useToEncrypt and
+# useToDecrypt (including its healthz TestIamPermissions check), which this
+# role covers. Scoped to the one key.
+#
+# Granted per host, not to the whole pool (principalSet://.../*), so a host
+# added to the pool for something else, such as a test host, doesn't get this
+# key. The provider's attribute_condition is what makes this safe: only this
+# host's key can produce this host's subject. An allow policy holds at most
+# 1,500 principals.
+resource "google_kms_crypto_key_iam_member" "host" {
+  for_each = var.hosts
+
+  crypto_key_id = google_kms_crypto_key.secrets.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "principal://iam.googleapis.com/${google_iam_workload_identity_pool.plugin.name}/subject/${each.key}"
+
+  # The subject only exists once its provider does.
+  depends_on = [google_iam_workload_identity_pool_provider.host]
 }
