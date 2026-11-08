@@ -258,6 +258,13 @@ k8s-cloudkms-plugin \
 The plugin fetches a token at startup and exits if that fails. So a wrong JWKS, issuer, audience, or IAM binding shows
 up immediately, not on the first encrypt or decrypt.
 
+Under systemd, the plugin supports `Type=notify` and `WatchdogSec=`, as the [systemd
+unit](deploy/systemd/k8s-cloudkms-plugin.service) uses them. It reports ready once it has a token and its socket is
+listening, so units ordered after it, such as kubelet, wait for that. With a watchdog set, it pings it after each
+liveness check: the gRPC server answers, and asking Cloud KMS whether this node may still use the key
+(`TestIamPermissions`, not an encrypt) returns. A Cloud KMS outage or a lost permission is logged but doesn't stop the
+pings, because restarting can't fix those. Only a hang does. Use a `WatchdogSec=` of 3 minutes or more.
+
 If you run it as a static pod or container next to `kube-apiserver`, mount `/dev/tpmrm0` into it and run it as a user or
 group that can open the device.
 

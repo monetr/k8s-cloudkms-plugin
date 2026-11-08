@@ -120,7 +120,7 @@ func main() {
 
 	pluginManager := plugin.NewManager(p, *pathToUnixSocket)
 
-	if err := run(pluginManager, hc, metrics); err != nil {
+	if err := run(pluginManager, hc, metrics, kms.Projects.Locations.KeyRings.CryptoKeys); err != nil {
 		glog.Exit(err)
 	}
 }
@@ -302,7 +302,7 @@ func serveHealthz(h *plugin.HealthCheckerManager, socketPath, path string) chan 
 	return errCh
 }
 
-func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m *plugin.Metrics) error {
+func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m *plugin.Metrics, keys *cloudkms.ProjectsLocationsKeyRingsCryptoKeysService) error {
 	signalsChan := make(chan os.Signal, 1)
 	signal.Notify(signalsChan, syscall.SIGINT, syscall.SIGTERM)
 
@@ -322,6 +322,19 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 		return <-kmsErrorCh
 	}
 	defer gRPCSrv.GracefulStop()
+
+	// With Type=notify, systemd only starts units ordered after this one, such
+	// as kubelet, once this is sent: the socket is listening, and the initial
+	// token fetch has already succeeded.
+	if err := sdNotify("READY=1"); err != nil {
+		glog.Warningf("Failed to notify systemd of readiness: %v", err)
+	}
+	if interval := watchdogInterval(); interval > 0 {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		glog.Infof("Pinging the systemd watchdog, interval %v", interval)
+		go runWatchdog(ctx, interval, livenessCheck(*pathToUnixSocket, keys, *keyURI))
+	}
 
 	for {
 		select {

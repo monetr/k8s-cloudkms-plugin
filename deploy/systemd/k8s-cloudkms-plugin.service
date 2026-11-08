@@ -17,6 +17,10 @@ Wants=network-online.target
 After=network-online.target
 # kube-apiserver can't read or write secrets until the plugin is up, and on
 # kubeadm-style clusters kube-apiserver is a static pod started by kubelet.
+# With Type=notify below, kubelet waits until the plugin's socket is listening.
+# This is ordering only: if the plugin fails to start, kubelet still starts and
+# kube-apiserver retries. Don't make kubelet Require= it, or a plugin failure
+# would keep every static pod on the node down.
 Before=kubelet.service
 # DevicePolicy=closed resolves DeviceAllow=/dev/tpmrm0 when the service starts,
 # so start only once the TPM device exists. Without this, a TPM that shows up
@@ -32,7 +36,19 @@ After=tpm2.target
 After=systemd-pcrphase.service
 
 [Service]
-Type=simple
+# The plugin tells systemd it's ready once it has an access token and its gRPC
+# socket is listening.
+Type=notify
+# While running, it pings the watchdog after each successful liveness check:
+# its gRPC server answers, and asking Cloud KMS whether it may still use the
+# key (TestIamPermissions, not an Encrypt) returns, whatever the answer. A
+# Cloud KMS or STS outage doesn't stop the pings; only a hang does. With no
+# ping for this long, systemd kills it with SIGABRT, which logs every
+# goroutine's stack, and Restart= starts it again. Keep this at 3 minutes or
+# more: the plugin gives each check half of it, and a slow but working token
+# refresh plus the check can take up to about 90 seconds (each request to
+# Google times out after 30).
+WatchdogSec=4min
 EnvironmentFile=/etc/k8s-cloudkms-plugin/env
 # $PLUGIN_ARGS is deliberately unbraced so systemd splits it into separate args.
 ExecStart=/usr/local/bin/k8s-cloudkms-plugin -logtostderr \
