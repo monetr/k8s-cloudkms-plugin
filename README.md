@@ -462,10 +462,10 @@ Pass the same policy to the plugin, for example appended to `PLUGIN_ARGS` in
 --tpm-key-pcrs=7 --tpm-pcr-public-key=/etc/k8s-cloudkms-plugin/pcr-public-key.pem
 ```
 
-If you use a signed PCR 11 policy, uncomment
-`After=systemd-pcrphase.service` in the
-[systemd unit](deploy/systemd/k8s-cloudkms-plugin.service). Before that unit
-runs, PCR 11 doesn't hold the "ready" value yet.
+If you use your own unit with a signed PCR 11 policy, order it
+`After=systemd-pcrphase.service`, as the
+[systemd unit](deploy/systemd/k8s-cloudkms-plugin.service) does. Before that
+unit runs, PCR 11 doesn't hold the "ready" value yet.
 
 At startup the plugin checks that the key is bound to exactly the configured
 policy and that the current boot satisfies it. If it isn't, the plugin exits
