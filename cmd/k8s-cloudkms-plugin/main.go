@@ -114,13 +114,26 @@ func main() {
 		glog.Exitf("invalid value %q for --kms", *kmsVersion)
 	}
 
-	hc := plugin.NewHealthChecker(healthChecker, *keyURI, kms.Projects.Locations.KeyRings.CryptoKeys, *pathToUnixSocket, *healthzTimeout, &url.URL{
-		Path: *healthzPath,
-	})
+	hc := plugin.NewHealthChecker(
+		healthChecker,
+		*keyURI,
+		kms.Projects.Locations.KeyRings.CryptoKeys,
+		*pathToUnixSocket,
+		*healthzTimeout,
+		&url.URL{
+			Path: *healthzPath,
+		},
+	)
 
 	pluginManager := plugin.NewManager(p, *pathToUnixSocket)
 
-	if err := run(pluginManager, hc, metrics, kms.Projects.Locations.KeyRings.CryptoKeys); err != nil {
+	cfg := runConfig{
+		healthzSocket: *healthzSocket,
+		healthzPath:   *healthzPath,
+		kmsSocket:     *pathToUnixSocket,
+		keyURI:        *keyURI,
+	}
+	if err := run(ctx, cfg, pluginManager, hc, metrics, kms.Projects.Locations.KeyRings.CryptoKeys); err != nil {
 		glog.Exit(err)
 	}
 }
@@ -155,7 +168,17 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 		return nil, err
 	}
 
-	conf := externalAccountConfig(open, tpm2.TPMHandle(handle), policy, *tpmPCRSignature, *wifProvider, *jwtIssuer, subject, *jwtLifetime, *impersonateSA)
+	conf := externalAccountConfig(
+		open,
+		tpm2.TPMHandle(handle),
+		policy,
+		*tpmPCRSignature,
+		*wifProvider,
+		*jwtIssuer,
+		subject,
+		*jwtLifetime,
+		*impersonateSA,
+	)
 
 	ts, client, err := newTokenSourceClient(ctx, conf, googleAPITimeout)
 	if err != nil {
@@ -302,9 +325,34 @@ func serveHealthz(h *plugin.HealthCheckerManager, socketPath, path string) chan 
 	return errCh
 }
 
-func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m *plugin.Metrics, keys *cloudkms.ProjectsLocationsKeyRingsCryptoKeysService) error {
-	signalsChan := make(chan os.Signal, 1)
-	signal.Notify(signalsChan, syscall.SIGINT, syscall.SIGTERM)
+// runConfig is what run needs from the flags. It's passed in, rather than read
+// from the flag variables, so that tests can run it with their own values.
+type runConfig struct {
+	healthzSocket string
+	healthzPath   string
+	// kmsSocket is the gRPC socket pluginManager listens on.
+	kmsSocket string
+	keyURI    string
+}
+
+// run serves until ctx is done, which main ties to SIGINT and SIGTERM, or
+// until the gRPC server fails.
+func run(
+	ctx context.Context,
+	cfg runConfig,
+	pluginManager *plugin.PluginManager,
+	h *plugin.HealthCheckerManager,
+	m *plugin.Metrics,
+	keys *cloudkms.ProjectsLocationsKeyRingsCryptoKeysService,
+) error {
+	// A signal during startup (the TPM check and the first token fetch, which
+	// can't be interrupted) cancels ctx before run is called. Exit now instead
+	// of starting to serve. Before, run only watched for signals itself, so
+	// such a signal was lost and systemd had to SIGKILL the plugin.
+	if ctx.Err() != nil {
+		glog.Infof("%v during startup, exiting", context.Cause(ctx))
+		return nil
+	}
 
 	// A nil channel never receives, so with metrics disabled that case below
 	// never fires.
@@ -312,7 +360,7 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 	if m != nil {
 		metricsErrCh = m.Serve()
 	}
-	healthzErrCh := serveHealthz(h, *healthzSocket, *healthzPath)
+	healthzErrCh := serveHealthz(h, cfg.healthzSocket, cfg.healthzPath)
 
 	gRPCSrv, kmsErrorCh := pluginManager.Start()
 	if gRPCSrv == nil {
@@ -330,18 +378,18 @@ func run(pluginManager *plugin.PluginManager, h *plugin.HealthCheckerManager, m 
 		glog.Warningf("Failed to notify systemd of readiness: %v", err)
 	}
 	if interval := watchdogInterval(); interval > 0 {
-		ctx, cancel := context.WithCancel(context.Background())
+		watchdogCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		glog.Infof("Pinging the systemd watchdog, interval %v", interval)
-		go runWatchdog(ctx, interval, livenessCheck(*pathToUnixSocket, keys, *keyURI))
+		go runWatchdog(watchdogCtx, interval, livenessCheck(cfg.kmsSocket, keys, cfg.keyURI))
 	}
 
 	for {
 		select {
-		case sig := <-signalsChan:
+		case <-ctx.Done():
 			// A requested stop, not a failure: exit 0 so that systemd doesn't
 			// mark the unit failed on every stop or restart.
-			glog.Infof("captured %v, shutting down kms-plugin", sig)
+			glog.Infof("%v, shutting down kms-plugin", context.Cause(ctx))
 			return nil
 		case kmsError := <-kmsErrorCh:
 			return kmsError
