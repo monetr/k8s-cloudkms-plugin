@@ -10,12 +10,14 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -182,6 +184,71 @@ func TestParseRSAPublicKeyPEM(t *testing.T) {
 	}
 	if _, err := ParseRSAPublicKeyPEM([]byte("not pem")); err == nil {
 		t.Fatal("accepted non-PEM input")
+	}
+}
+
+// selfSignedCertPEM returns a PEM certificate for pub, signed by priv. It
+// expired an hour ago: only the key is used, so validity must not matter.
+func selfSignedCertPEM(t *testing.T, pub crypto.PublicKey, priv crypto.Signer) []byte {
+	t.Helper()
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "PCR signing"},
+		NotBefore:    time.Now().Add(-2 * time.Hour),
+		NotAfter:     time.Now().Add(-time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// systemd and ukify setups that sign with PKCS #11 often keep the PCR-signing
+// key as a certificate, so the public key may come as one.
+func TestParseRSAPublicKeyPEMCertificate(t *testing.T) {
+	key := newRSAKey(t)
+	got, err := ParseRSAPublicKeyPEM(selfSignedCertPEM(t, &key.PublicKey, key))
+	if err != nil || !got.Equal(&key.PublicKey) {
+		t.Fatalf("RSA certificate: %v", err)
+	}
+
+	ec, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseRSAPublicKeyPEM(selfSignedCertPEM(t, &ec.PublicKey, ec)); err == nil || !strings.Contains(err.Error(), "not an RSA key") {
+		t.Fatalf("expected an EC certificate to be rejected as not RSA, got %v", err)
+	}
+	if _, err := ParseRSAPublicKeyPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("junk")})); err == nil {
+		t.Fatal("accepted a malformed certificate")
+	}
+}
+
+// CheckSignedPCRPolicies is what lets `tpm-wif-key create` refuse a key the
+// current boot couldn't use, before anything is persisted.
+func TestCheckSignedPCRPolicies(t *testing.T) {
+	tpm := openSimulator(t)
+	extendPCR(t, tpm, 7, []byte("secure boot state"))
+	bootUKI(t, tpm, "enter-initrd", "leave-initrd", "sysinit", "ready")
+	policies, err := ReadSignedPCRPolicies(filepath.Join(fixtureDir, "tpm2-pcr-signature.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CheckSignedPCRPolicies(tpm, fixtureSigner(t), policies); err != nil {
+		t.Fatalf("matching boot: %v", err)
+	}
+
+	wrong := newRSAKey(t)
+	if err := CheckSignedPCRPolicies(tpm, &wrong.PublicKey, policies); err == nil || !strings.Contains(err.Error(), "no sha256 PCR policy is signed by the configured PCR-signing key") {
+		t.Fatalf("expected a wrong signer to be rejected, got %v", err)
+	}
+
+	// Past "ready", as after shutdown starts, no signed phase matches.
+	extendPCR(t, tpm, 11, []byte("shutdown"))
+	if err := CheckSignedPCRPolicies(tpm, fixtureSigner(t), policies); err == nil || !strings.Contains(err.Error(), "matches the current PCR values") {
+		t.Fatalf("expected an unsigned boot phase to be rejected, got %v", err)
 	}
 }
 
