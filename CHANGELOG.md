@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.0.0](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.1...v2.0.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* Move the default TPM key handle to 0x81008101
+
+### Features
+
+* Accept a PEM certificate that holds an RSA key ([b36ab9a](https://github.com/monetr/k8s-cloudkms-plugin/commit/b36ab9a55de872da7aaccab88863cc34598724d7))
+* Add systemd readiness and watchdog support ([100ae79](https://github.com/monetr/k8s-cloudkms-plugin/commit/100ae79ee8afdb7de3f06f32dd7d309882eaa629))
+* Adding support for PCR7 and PCR11 binding ([d25ffdb](https://github.com/monetr/k8s-cloudkms-plugin/commit/d25ffdb4a8ee7837f79eae5c11e019aa5683dcb6))
+* Move the default TPM key handle to 0x81008101 ([f1d62aa](https://github.com/monetr/k8s-cloudkms-plugin/commit/f1d62aa974516d573110e0623a2927ec813d8d75))
+
+
+### Bug Fixes
+
+* Adding tests to cover tpmkey policy things ([98592dd](https://github.com/monetr/k8s-cloudkms-plugin/commit/98592dd81de898e0e7f7b7de54137766acdfae8c))
+* Allow disabling the metrics port ([58ac8f3](https://github.com/monetr/k8s-cloudkms-plugin/commit/58ac8f3c9a1e27400e6acd26ef4108598813cc16))
+* **deps:** update module google.golang.org/api to v0.310.0 ([#13](https://github.com/monetr/k8s-cloudkms-plugin/issues/13)) ([e0b26db](https://github.com/monetr/k8s-cloudkms-plugin/commit/e0b26dbc5c0115733267a72516131593dc2d0d22))
+* **deps:** update module google.golang.org/grpc to v1.85.0 ([#14](https://github.com/monetr/k8s-cloudkms-plugin/issues/14)) ([145d971](https://github.com/monetr/k8s-cloudkms-plugin/commit/145d9717c261177a90c402bdacdc32f06f14d8a0))
+* Fixed panic when plugin manager start fails ([b64b934](https://github.com/monetr/k8s-cloudkms-plugin/commit/b64b9344ecd2948a484ef9df7683b0527b7af30a))
+* Fixed SIGTERM causing an exit status of 1 ([3fc9733](https://github.com/monetr/k8s-cloudkms-plugin/commit/3fc97332fc4bc0425497183fab4fb7ce50c18298))
+* Fixing argument handling ([07dd5e2](https://github.com/monetr/k8s-cloudkms-plugin/commit/07dd5e239a39106f0027bfec837aa7e93793aa9c))
+* Fixing timeout refreshing token ([aa34468](https://github.com/monetr/k8s-cloudkms-plugin/commit/aa3446878e7f6170a6a4c5cf3eca28002148536e))
+* Improving context passing and adding tests ([f388cc9](https://github.com/monetr/k8s-cloudkms-plugin/commit/f388cc953a23ee4f837aeb28a577b63d9ce2d95f))
+* Prevent resetable PCRs from being used ([bb27386](https://github.com/monetr/k8s-cloudkms-plugin/commit/bb27386bc2a36320c8df788e181bb54801ec2590))
+* Refuse to create a key if there is no matchin PCR policy ([b624e76](https://github.com/monetr/k8s-cloudkms-plugin/commit/b624e763ead85084d782da7529cebd82e25e60a6))
+* Verify the PCR policy signature before persisting ([08fd7c7](https://github.com/monetr/k8s-cloudkms-plugin/commit/08fd7c761dff2cdde677dd6d6b217edf9b4b818f))
+* Wait until PCR 11 is ready ([26f5013](https://github.com/monetr/k8s-cloudkms-plugin/commit/26f50132b95a554d0a2fe230a804fadf3ee90be7))
+
+
+### Miscellaneous
+
+* Adding unit tests for systemd things ([31be012](https://github.com/monetr/k8s-cloudkms-plugin/commit/31be0124cb1d5d1aa797ccf2a3914d2d5282e6b2))
+* Even more tests ([ff30e46](https://github.com/monetr/k8s-cloudkms-plugin/commit/ff30e46dc8ceb2647032f72087928c53fb6f059c))
+
+
+### Documentation
+
+* Clarifying documentation ([9c24fdd](https://github.com/monetr/k8s-cloudkms-plugin/commit/9c24fdda3048b0b0d8b23445d5885d1cf492e63f))
+* Updating example to be more concise ([1cc46f0](https://github.com/monetr/k8s-cloudkms-plugin/commit/1cc46f022819cb47c2b9c74ad102f6524f6aa355))
+
 ## [1.0.1](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.0...v1.0.1) (2026-10-31)
 
 
