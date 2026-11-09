@@ -111,8 +111,6 @@ func main() {
 		p = v2.NewPlugin(kms.Projects.Locations.KeyRings.CryptoKeys, *keyURI, *keySuffix)
 		healthChecker = v2.NewHealthChecker()
 		glog.Info("Kubernetes KMS API v2")
-	default:
-		glog.Exitf("invalid value %q for --kms", *kmsVersion)
 	}
 
 	hc := plugin.NewHealthChecker(
@@ -447,11 +445,14 @@ func run(
 }
 
 func mustValidateFlags() {
+	if *kmsVersion != "v1" && *kmsVersion != "v2" {
+		glog.Exitf("invalid value %q for --kms", *kmsVersion)
+	}
 	if *kmsVersion == "v1" && *keySuffix != "" {
 		glog.Exitf("--key-suffix argument cannot be used in v1 mode (--kms=v1)")
 	}
-	if *wifProvider == "" || *jwtIssuer == "" {
-		glog.Exitf("--wif-provider and --jwt-issuer are required")
+	if *keyURI == "" || *wifProvider == "" || *jwtIssuer == "" {
+		glog.Exitf("--key-uri, --wif-provider and --jwt-issuer are required")
 	}
 	glog.Infof("Checking socket path %q", *pathToUnixSocket)
 	socketDir := filepath.Dir(*pathToUnixSocket)
