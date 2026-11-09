@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -220,6 +221,7 @@ func newTokenSourceClient(
 	if err != nil {
 		return nil, nil, err
 	}
+	ts = &failureCachingTokenSource{src: ts, hold: tokenFailureHold}
 
 	// oauth2.NewClient keeps only the context client's Transport, so set the
 	// timeout again. Upstream's healthz TestIamPermissions call has no context,
@@ -227,6 +229,45 @@ func newTokenSourceClient(
 	client := oauth2.NewClient(ctx, ts)
 	client.Timeout = timeout
 	return ts, client, nil
+}
+
+// tokenFailureHold is how long a failed token refresh is returned to later
+// callers before another is attempted.
+const tokenFailureHold = 5 * time.Second
+
+// failureCachingTokenSource gives callers waiting on a token refresh the
+// refresh's failure. oauth2's token sources hold a mutex during a refresh but
+// don't remember failures, so each waiter would then run its own refresh in
+// turn. With Google unreachable each of those takes up to googleAPITimeout, and
+// waiters don't give up when their request's context ends. The queue would
+// outlast the watchdog's check, and systemd would kill the plugin for an outage
+// that a restart can't fix.
+//
+// A refresh only runs once the cached token has expired, so a held failure
+// never hides a usable token.
+type failureCachingTokenSource struct {
+	src  oauth2.TokenSource
+	hold time.Duration
+
+	mu      sync.Mutex
+	err     error
+	retryAt time.Time
+}
+
+// Token implements oauth2.TokenSource.
+func (s *failureCachingTokenSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.err != nil && time.Now().Before(s.retryAt) {
+		return nil, s.err
+	}
+	token, err := s.src.Token()
+	if err != nil {
+		s.err, s.retryAt = err, time.Now().Add(s.hold)
+		return nil, err
+	}
+	s.err = nil
+	return token, nil
 }
 
 // tpmPolicy builds the key's boot-state policy from the --tpm-key-pcrs and
