@@ -255,8 +255,9 @@ k8s-cloudkms-plugin \
   --path-to-unix-socket=/var/run/kmsplugin/socket.sock
 ```
 
-The plugin fetches a token at startup and exits if that fails. So a wrong JWKS, issuer, audience, or IAM binding shows
-up immediately, not on the first encrypt or decrypt.
+At startup the plugin fetches a token and asks Cloud KMS whether it may use the key, and exits if either fails. So a
+wrong JWKS, issuer, audience, or IAM binding shows up immediately, not on the first encrypt or decrypt. If Cloud KMS
+can't answer, for example during an outage, the plugin logs that and starts anyway.
 
 Under systemd, the plugin supports `Type=notify` and `WatchdogSec=`, as the [systemd
 unit](deploy/systemd/k8s-cloudkms-plugin.service) uses them. It reports ready once it has a token and its socket is

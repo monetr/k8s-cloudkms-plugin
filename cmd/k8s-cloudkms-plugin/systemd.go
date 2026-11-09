@@ -110,8 +110,6 @@ func livenessCheck(
 	if strings.HasPrefix(socketPath, "@") {
 		target = "unix-abstract:" + socketPath[1:]
 	}
-	// The same permissions upstream's healthz checks.
-	want := []string{"cloudkms.cryptoKeyVersions.useToDecrypt", "cloudkms.cryptoKeyVersions.useToEncrypt"}
 	// Checks run one at a time, so this needs no lock.
 	var lastProblem string
 
@@ -132,7 +130,7 @@ func livenessCheck(
 		}
 		done := make(chan result, 1)
 		go func() {
-			resp, err := keys.TestIamPermissions(keyURI, &cloudkms.TestIamPermissionsRequest{Permissions: want}).Context(ctx).Do()
+			resp, err := keys.TestIamPermissions(keyURI, &cloudkms.TestIamPermissionsRequest{Permissions: keyPermissions}).Context(ctx).Do()
 			done <- result{resp, err}
 		}()
 		var r result
@@ -147,7 +145,7 @@ func livenessCheck(
 		problem := ""
 		if r.err != nil {
 			problem = fmt.Sprintf("failed to check permissions on %s: %v", keyURI, r.err)
-		} else if missing := missingPermissions(want, r.resp.Permissions); len(missing) > 0 {
+		} else if missing := missingPermissions(keyPermissions, r.resp.Permissions); len(missing) > 0 {
 			problem = fmt.Sprintf("missing %v on %s", missing, keyURI)
 		}
 		if problem != lastProblem {
@@ -161,6 +159,10 @@ func livenessCheck(
 		return nil
 	}
 }
+
+// keyPermissions are what the plugin needs on the key, the same permissions
+// upstream's healthz checks.
+var keyPermissions = []string{"cloudkms.cryptoKeyVersions.useToDecrypt", "cloudkms.cryptoKeyVersions.useToEncrypt"}
 
 func missingPermissions(want, got []string) []string {
 	var missing []string

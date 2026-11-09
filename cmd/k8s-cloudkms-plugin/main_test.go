@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -167,6 +168,71 @@ func TestExternalAccountConfigImpersonation(t *testing.T) {
 	if fake.stsCalls != 1 || fake.impersonationCalls != 1 {
 		t.Fatalf("calls: sts=%d impersonation=%d, want 1/1", fake.stsCalls, fake.impersonationCalls)
 	}
+}
+
+func TestCheckKeyAccess(t *testing.T) {
+	const (
+		encrypt = "cloudkms.cryptoKeyVersions.useToEncrypt"
+		decrypt = "cloudkms.cryptoKeyVersions.useToDecrypt"
+	)
+	apiError := func(code int) func(w http.ResponseWriter) {
+		return func(w http.ResponseWriter) {
+			w.WriteHeader(code)
+			fmt.Fprintf(w, `{"error":{"code":%d,"message":"test"}}`, code)
+		}
+	}
+
+	// Cloud KMS gave a definite answer, so the plugin must refuse to start or
+	// report ready when it can't use the key.
+	for name, tc := range map[string]struct {
+		respond func(w http.ResponseWriter)
+		wantErr string
+	}{
+		"encrypt missing": {permissions(decrypt), encrypt},
+		"decrypt missing": {permissions(encrypt), decrypt},
+		"no permissions":  {func(w http.ResponseWriter) { fmt.Fprint(w, `{}`) }, encrypt},
+		"bad request":     {apiError(http.StatusBadRequest), "no access"},
+		"forbidden":       {apiError(http.StatusForbidden), "no access"},
+		"not found":       {apiError(http.StatusNotFound), "no access"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := checkKeyAccess(context.Background(), fakeKMS(t, tc.respond), testKeyURI)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || !strings.Contains(err.Error(), testKeyURI) {
+				t.Fatalf("got %v, want an error about %q on %s", err, tc.wantErr, testKeyURI)
+			}
+		})
+	}
+
+	// These don't say whether the node can use the key. Exiting wouldn't fix
+	// any of them, and the plugin would be down once they ended.
+	for name, respond := range map[string]func(w http.ResponseWriter){
+		"permissions granted": permissions(encrypt, decrypt),
+		"unauthorized":        apiError(http.StatusUnauthorized),
+		"rate limited":        apiError(http.StatusTooManyRequests),
+		"server error":        apiError(http.StatusInternalServerError),
+		"unavailable":         apiError(http.StatusServiceUnavailable),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := checkKeyAccess(context.Background(), fakeKMS(t, respond), testKeyURI); err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+
+	// Also how a signal during startup looks, since main passes its signal
+	// context.
+	t.Run("no answer before the context ends", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		keys := fakeKMS(t, nil)
+		// In the background, so that not honoring ctx fails here rather than
+		// hanging until go test's own timeout.
+		done := make(chan error, 1)
+		go func() { done <- checkKeyAccess(ctx, keys, testKeyURI) }()
+		if err := waitForResult(t, done); err != nil {
+			t.Fatalf("expected no error, got %v", err)
+		}
+	})
 }
 
 func verifyJWT(t *testing.T, jwk tpmkey.JWK, token string) map[string]any {

@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -32,6 +33,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google/externalaccount"
 	"google.golang.org/api/cloudkms/v1"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 
 	"github.com/monetr/k8s-cloudkms-plugin/tpmkey"
@@ -84,6 +86,10 @@ func main() {
 	kms, err := cloudkms.NewService(ctx, option.WithHTTPClient(httpClient))
 	if err != nil {
 		glog.Exitf("failed to instantiate cloud kms httpClient: %v", err)
+	}
+
+	if err := checkKeyAccess(ctx, kms.Projects.Locations.KeyRings.CryptoKeys, *keyURI); err != nil {
+		glog.Exit(err)
 	}
 
 	// Metrics are unauthenticated and on TCP, so any local process, including
@@ -184,7 +190,8 @@ func newTPMHTTPClient(ctx context.Context) (*http.Client, error) {
 		return nil, err
 	}
 
-	// Fail fast at startup if the TPM, the JWKS, or the IAM bindings are wrong.
+	// Fail fast at startup if the TPM or the JWKS is wrong. A federated token is
+	// issued whether or not it has access to the key; see checkKeyAccess.
 	if _, err := ts.Token(); err != nil {
 		return nil, fmt.Errorf("failed to obtain initial access token: %w", err)
 	}
@@ -304,6 +311,30 @@ func checkTPMPolicy(open func() (transport.TPMCloser, error), handle tpm2.TPMHan
 	}
 	defer tpm.Close()
 	return tpmkey.Check(tpm, handle, policy, signed)
+}
+
+// checkKeyAccess returns an error if Cloud KMS says this node can't use the
+// key: it lacks a permission, or the key doesn't exist or is misnamed. If Cloud
+// KMS can't answer, it only logs that and returns nil, since exiting wouldn't
+// fix an outage and the plugin would be down once it ended.
+func checkKeyAccess(
+	ctx context.Context,
+	keys *cloudkms.ProjectsLocationsKeyRingsCryptoKeysService,
+	keyURI string,
+) error {
+	resp, err := keys.TestIamPermissions(keyURI, &cloudkms.TestIamPermissionsRequest{Permissions: keyPermissions}).Context(ctx).Do()
+	if err != nil {
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) && (apiErr.Code == http.StatusBadRequest || apiErr.Code == http.StatusForbidden || apiErr.Code == http.StatusNotFound) {
+			return fmt.Errorf("no access to Cloud KMS key %s: %w", keyURI, err)
+		}
+		glog.Warningf("Could not check access to Cloud KMS key %s, starting anyway: %v", keyURI, err)
+		return nil
+	}
+	if missing := missingPermissions(keyPermissions, resp.Permissions); len(missing) > 0 {
+		return fmt.Errorf("missing %v on Cloud KMS key %s", missing, keyURI)
+	}
+	return nil
 }
 
 // externalAccountConfig describes the STS exchange (and optional service
