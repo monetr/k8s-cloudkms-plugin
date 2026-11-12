@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.1](https://github.com/monetr/k8s-cloudkms-plugin/compare/v2.0.0...v2.0.1) (2026-11-12)
+
+
+### Bug Fixes
+
+* **deps:** update module google.golang.org/api to v0.311.0 ([#18](https://github.com/monetr/k8s-cloudkms-plugin/issues/18)) ([2d0532d](https://github.com/monetr/k8s-cloudkms-plugin/commit/2d0532dec2d9f4e7d4e1068bcf2428a5323b7c28))
+* Properly assert permissions on startup ([06e7d72](https://github.com/monetr/k8s-cloudkms-plugin/commit/06e7d725e9cbc864b613b933f675be47fe6719a6))
+* Use a shared token source ([4bdfb7e](https://github.com/monetr/k8s-cloudkms-plugin/commit/4bdfb7ea53506ee9d586455183630a277ce685a9))
+* Validate key uri ([3746042](https://github.com/monetr/k8s-cloudkms-plugin/commit/3746042d907e2408a1c41921920ca91d24da81fb))
+
+
+### Miscellaneous
+
+* **deps:** update github/codeql-action action to v4.39.2 ([#16](https://github.com/monetr/k8s-cloudkms-plugin/issues/16)) ([f6f1f8d](https://github.com/monetr/k8s-cloudkms-plugin/commit/f6f1f8d1a21312491fc937acf22d9413785946fd))
+* **deps:** update github/codeql-action action to v4.39.3 ([#17](https://github.com/monetr/k8s-cloudkms-plugin/issues/17)) ([c878366](https://github.com/monetr/k8s-cloudkms-plugin/commit/c8783660f387404b71bb23097bf102b193964270))
+
 ## [2.0.0](https://github.com/monetr/k8s-cloudkms-plugin/compare/v1.0.1...v2.0.0) (2026-11-08)
 
 
