@@ -6,7 +6,7 @@ require (
 	github.com/GoogleCloudPlatform/k8s-cloudkms-plugin v0.0.0-20260514213521-a88bafe6cfcc
 	github.com/golang/glog v1.2.5
 	github.com/google/go-tpm v0.9.8
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 	google.golang.org/api v0.311.0
 	google.golang.org/grpc v1.85.0
 )
