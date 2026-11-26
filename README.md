@@ -74,7 +74,7 @@ before installing anything.
 ```sh
 (
   set -euo pipefail
-  VERSION="v2.0.0"
+  VERSION="v2.0.1"
   case "$(uname -m)" in
     x86_64) ARCH=amd64 ;;
     aarch64 | arm64) ARCH=arm64 ;;
